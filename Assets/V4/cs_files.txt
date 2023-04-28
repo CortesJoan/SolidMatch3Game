@@ -1,0 +1,1335 @@
+File: Board.cs 
+﻿using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using DG.Tweening;
+using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.Serialization;
+
+public class Board : MonoBehaviour
+{
+    public int width;
+    public int height;
+    public GameObject tilePrefab;
+    public GameObject[] tiles;
+    public GameObject destructionEffectPrefab;
+    public UnityEvent onMatchStart;
+    public UnityEvent onBoardRefillComplete;
+    public int refillType;
+
+    internal Tile[,] tileMatrix;
+    private TileDestructionEffect destructionEffect;
+
+    private MatchChecker matchChecker;
+    private TileManager tileManager;
+    private BoardRefiller boardRefiller;
+    private BoardCommandManager boardCommandManager;
+    [Header("Animation Settings")]
+    [SerializeField]
+    internal float swapDuration = 0.5f;
+    [SerializeField] private float waitForRefillDelay = 0.5f;
+    [SerializeField] private float matchClearTime = 0.5f;
+ 
+    void Awake()
+    {
+        tileMatrix = new Tile[width, height];
+
+        // Pass proper arguments to MatchChecker constructor
+        matchChecker = new MatchChecker(tileMatrix, width, height);
+
+        // Pass proper arguments to TileManager constructor
+        tileManager = new TileManager(tileMatrix, tilePrefab, tiles, swapDuration, transform);
+
+        // Pass proper arguments to BoardRefiller constructor
+        boardRefiller = new BoardRefiller(tileMatrix, tilePrefab, tiles, width, height, transform);
+
+        InitializeBoard();
+        boardCommandManager = GetComponent<BoardCommandManager>();
+        GameObject effect = Instantiate(destructionEffectPrefab);
+        destructionEffect = effect.GetComponent<TileDestructionEffect>();
+    }
+
+
+    private void InitializeBoard()
+    {
+        for (int i = 0; i < width; i++)
+        {
+            for (int j = 0; j < height; j++)
+            {
+                tileManager.CreateAndSetUpTile(i, j);
+            }
+        }
+    }
+
+    public List<Tile> CheckForMatchesAt(int x, int y)
+    {
+        return matchChecker.CheckForMatchesAt(x, y);
+    }
+
+
+    public IEnumerator SwapTiles(Tile tileA, Tile tileB)
+    {
+        int tileAX = tileA.x;
+        int tileAY = tileA.y;
+        int tileBX = tileB.x;
+        int tileBY = tileB.y;
+
+        yield return StartCoroutine(tileManager.SwapTiles(tileA, tileB));
+
+        List<Tile> newMatches = matchChecker.CheckForMatchesAt(tileA.x, tileA.y);
+        List<Tile> newMatchesB = matchChecker.CheckForMatchesAt(tileB.x, tileB.y);
+        newMatches.AddRange(newMatchesB);
+        if (newMatches.Count > 0)
+        {
+            onMatchStart.Invoke();
+            ClearMatches(newMatches);
+            yield return new WaitForSeconds(waitForRefillDelay);
+            onBoardRefillComplete.Invoke();
+            StartCoroutine(RefillBoard());
+        }
+        else
+        {
+            // Swap tiles' positions in the matrix
+            tileMatrix[tileAX, tileAY] = tileB;
+            tileMatrix[tileBX, tileBY] = tileA;
+
+            // Update tile coordinates
+            tileA.x = tileBX;
+            tileA.y = tileBY;
+            tileB.x = tileAX;
+            tileB.y = tileAY;
+
+            // No match: reverse the swap
+            // Swap back the tiles using DOTween
+            tileA.MoveToPosition(tileAX, tileAY, swapDuration);
+            tileB.MoveToPosition(tileBX, tileBY, swapDuration);
+
+            // Wait for the reverse swap to complete
+            yield return new WaitForSeconds(swapDuration);
+
+            // Swap tiles' positions in the matrix back to the original
+            tileMatrix[tileAX, tileAY] = tileA;
+            tileMatrix[tileBX, tileBY] = tileB;
+
+            // Restore the original tile coordinates
+            tileA.x = tileAX;
+            tileA.y = tileAY;
+            tileB.x = tileBX;
+            tileB.y = tileBY;
+        }
+    }
+
+    public void ClearMatches(List<Tile> matches)
+    {
+        foreach (Tile tile in matches)
+        {
+            boardCommandManager.AddAndDoCommand(new CommandDestroy(tile,destructionEffect,duration: matchClearTime));
+        }
+    }
+
+    public IEnumerator RefillBoard()
+    {
+        yield return StartCoroutine(boardRefiller.RefillBoard(refillType));
+
+        List<Tile> newMatches = matchChecker.FindAllMatches();
+        if (newMatches.Count > 0)
+        {
+            GameController.Instance.IncreaseCombo();
+            ClearMatches(newMatches);
+            yield return new WaitForSeconds(waitForRefillDelay);
+            StartCoroutine(RefillBoard());
+        }
+    }
+
+    public bool AreTilesAdjacent(Tile tileA, Tile tileB)
+    {
+        int deltaX = Mathf.Abs(tileA.x - tileB.x);
+        int deltaY = Mathf.Abs(tileA.y - tileB.y);
+
+        return (deltaX == 1 && deltaY == 0) || (deltaX == 0 && deltaY == 1);
+    }
+
+    public UnityEvent<int, int> onTileMatchFound => matchChecker.OnTileMatchFound;
+} 
+File: BoardCommandManager.cs 
+﻿using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+class BoardCommandManager : MonoBehaviour
+{
+    private Board board;
+    private List<Command> performedCommands;
+    public static BoardCommandManager instance;
+
+    private void Awake()
+    {
+        instance = this;
+        InitializeHistory();
+    }
+
+    void InitializeHistory()
+    {
+        board = GetComponent<Board>();
+        performedCommands = new List<Command>();
+    }
+
+    public void AddCommand(Command command)
+    {
+        performedCommands.Add(command);
+    }
+
+    public void DoCommand(int commandIndex)
+    {
+        if (commandIndex < 0 || commandIndex >= performedCommands.Count)
+        {
+            return;
+        }
+        performedCommands[commandIndex].DoCommand();
+    }
+
+    public void UndoLastCommand()
+    {
+        if (performedCommands.Count == 0)
+        {
+            return;
+        }
+        performedCommands[^1].UndoCommand();
+        performedCommands.Remove(performedCommands[^1]);
+    }
+
+    public void AddAndDoCommand(Command command)
+    {
+        performedCommands.Add(command);
+        command.DoCommand();
+    }
+} 
+File: BoardRefiller.cs 
+﻿using System.Collections;
+using DG.Tweening;
+using UnityEngine;
+using UnityEngine.Events;
+
+public class BoardRefiller
+{
+    private Tile[,] _tileMatrix;
+    private GameObject _tilePrefab;
+    private GameObject[] _tiles;
+    private int _width, _height;
+    private Transform _parentTransform;
+    public  static UnityEvent<Tile> onTileFullSpawn = new UnityEvent<Tile>();
+
+    public BoardRefiller(Tile[,] tileMatrix, GameObject tilePrefab, GameObject[] tiles, int width, int height,
+        Transform parentTransform)
+    {
+        _tileMatrix = tileMatrix;
+        _tilePrefab = tilePrefab;
+        _tiles = tiles;
+        _width = width;
+        _height = height;
+        _parentTransform = parentTransform;
+    }
+
+    public IEnumerator RefillBoard(int refillType)
+    {
+        // Wait for tiles to settle
+        yield return new WaitForSeconds(0.5f);
+
+        switch (refillType)
+        {
+            case 1:
+                SpawnNewTiles();
+                break;
+            case 2:
+                MakeTilesFallIntoEmptySpacesAndSpawnNewTiles();
+                break;
+            default:
+                Debug.LogError("Invalid refillType provided.");
+                break;
+        }
+    }
+
+    private void SpawnNewTiles()
+    {
+        for (int i = 0; i < _width; i++)
+        {
+            for (int j = 0; j < _height; j++)
+            {
+                if (_tileMatrix[i, j] == null)
+                {
+                    SpawnNewTileAt(i, j);
+                }
+            }
+        }
+    }
+
+    private Tile SpawnNewTileAt(int x, int y)
+    {
+        GameObject newTile = Object.Instantiate(_tilePrefab, new Vector2(x, y), Quaternion.identity);
+        newTile.transform.SetParent(_parentTransform);
+        int randomTile = GetRandomTileIndex(x, y);
+        SetTileSprite(newTile, randomTile);
+
+        Tile tileComponent = newTile.GetComponent<Tile>();
+        tileComponent.Init(x, y, randomTile);
+        _tileMatrix[x, y] = tileComponent;
+
+        newTile.transform.DOScale(Vector3.zero, 0.5f).From().OnComplete(() =>
+        {
+            _tileMatrix[x, y].SetIsFullySpawned(true);
+            onTileFullSpawn?.Invoke(tileComponent);
+        });
+        return _tileMatrix[x, y];
+    }
+
+    private int GetRandomTileIndex(int x, int y)
+    {
+        int randomTile;
+
+        do
+        {
+            randomTile = Random.Range(0, _tiles.Length);
+        } while (CreatesInitialMatch(x, y, randomTile));
+
+        return randomTile;
+    }
+
+    private bool CreatesInitialMatch(int x, int y, int tileType)
+    {
+        if (x > 1 && tileType == _tileMatrix[x - 1, y]?.tileType && tileType == _tileMatrix[x - 2, y]?.tileType)
+        {
+            return true;
+        }
+
+        if (y > 1 && tileType == _tileMatrix[x, y - 1]?.tileType && tileType == _tileMatrix[x, y - 2]?.tileType)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private void SetTileSprite(GameObject tileObject, int tileIndex)
+    {
+        SpriteRenderer renderer = tileObject.GetComponentInChildren<SpriteRenderer>();
+        renderer.sprite = _tiles[tileIndex].GetComponentInChildren<SpriteRenderer>().sprite;
+    }
+
+    private void MakeTilesFallIntoEmptySpacesAndSpawnNewTiles()
+    {
+        for (int x = 0; x < _width; x++)
+        {
+            float fallDelay = 0;
+            for (int y = 0; y < _height; y++)
+            {
+                if (_tileMatrix[x, y] == null)
+                {
+                    int newY = y;
+                    while (newY < _height - 1 && _tileMatrix[x, newY] == null)
+                    {
+                        newY++;
+                    }
+
+                    if (newY < _height - 1)
+                    {
+                        _tileMatrix[x, newY].MoveToPosition(x, y, 0.5f);
+                        _tileMatrix[x, newY].y = y;
+                        _tileMatrix[x, y] = _tileMatrix[x, newY];
+                        _tileMatrix[x, newY] = null;
+
+                        fallDelay += 0.1f;
+                    }
+                    else
+                    {
+                        SpawnNewTileAt(x, _height - 1);
+                        _tileMatrix[x, _height - 1].transform.position = new Vector3(x, _height, 0);
+                        _tileMatrix[x, _height - 1].MoveToPosition(x, y, 0.5f);
+                        _tileMatrix[x, _height - 1].y = y;
+                        _tileMatrix[x, y] = _tileMatrix[x, _height - 1];
+                    }
+                }
+            }
+        }
+    }
+} 
+File: Command.cs 
+﻿public abstract  class Command
+{
+  public abstract void DoCommand(bool force=false);
+  public abstract void UndoCommand(bool force=false);
+
+} 
+File: CommandAddScore.cs 
+﻿public class CommandAddScore : Command
+{
+    // Un campo para guardar la referencia al modelo del juego
+    private GameModel gameModel;
+    // Un campo para guardar el valor a sumar o restar a la puntuación
+    private int scoreValue;
+
+    // El constructor recibe el modelo del juego y el valor a sumar o restar
+    public CommandAddScore(GameModel gameModel, int scoreValue)
+    {
+        // Guarda los valores recibidos en los campos correspondientes
+        this.gameModel = gameModel;
+        this.scoreValue = scoreValue;
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        // Llama al método AddScore del modelo del juego pasándole el valor a sumar
+        gameModel.AddScore(scoreValue);
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        // Llama al método AddScore del modelo del juego pasándole el valor a restar (el opuesto al valor a sumar)
+        gameModel.AddScore(-scoreValue);
+    }
+} 
+File: CommandBoardRefill.cs 
+﻿using System.Collections.Generic;
+using UnityEngine;
+
+public class CommandBoardRefill : Command
+{
+    // A field to store the reference to the board refiller
+    private BoardRefiller boardRefiller;
+    private int refillType; // A field to store the list of tiles that were spawned or moved during the refill
+    private List<Tile> affectedTiles; // A field to store the list of original positions of the affected tiles
+    private List<Vector2Int> originalPositions;
+
+// The constructor receives the board refiller and the refill type
+    public CommandBoardRefill(BoardRefiller boardRefiller, int refillType)
+    {
+        // Save the values received in the corresponding fields
+        this.boardRefiller = boardRefiller;
+        this.refillType = refillType;
+        // Initialize the lists of affected tiles and original positions
+        affectedTiles = new List<Tile>();
+        originalPositions = new List<Vector2Int>();
+        // Subscribe to the onTileFullSpawn event of the board refiller
+        BoardRefiller.onTileFullSpawn.AddListener(OnTileFullSpawn);
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        // Call the RefillBoard method of the board refiller passing the refill type
+        boardRefiller.RefillBoard(refillType);
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        // Loop through the affected tiles and their original positions
+        for (int i = 0; i < affectedTiles.Count; i++)
+        {
+            // Get the current tile and its original position
+            Tile tile = affectedTiles[i];
+            Vector2Int originalPosition = originalPositions[i];
+            // Get the current position of the tile
+            int currentX = tile.x;
+            int currentY = tile.y;
+            // Move the tile back to its original position using its MoveToPosition method
+            tile.MoveToPosition(originalPosition.x, originalPosition.y, 0.5f);
+            // Update the tile coordinates and its position in the board matrix
+            Board board = GameObject.FindObjectOfType<Board>();
+            board.tileMatrix[currentX, currentY] = null;
+            board.tileMatrix[originalPosition.x, originalPosition.y] = tile;
+            tile.x = originalPosition.x;
+            tile.y = originalPosition.y;
+        }
+    }
+
+    private void OnTileFullSpawn(Tile spawnedTile)
+    {
+        // Add the spawned tile to the list of affected tiles
+        affectedTiles.Add(spawnedTile);
+        // Add a dummy position (-1, -1) to the list of original positions for spawned tiles
+        originalPositions.Add(new Vector2Int(-1, -1));
+    }
+} 
+File: CommandDestroy.cs 
+﻿using DG.Tweening;
+using UnityEngine;
+
+public class CommandDestroy : Command
+{
+    // Un campo para guardar la referencia a la casilla a destruir
+    private Tile tileToDestroy;
+    // Un campo para guardar el tipo de la casilla antes de destruirla
+    private int tileTypeBeforeDestroy;
+    // Un campo para guardar el efecto de destrucción que se usa
+    private TileDestructionEffect destructionEffect;
+    // Un campo para guardar la duración del efecto de destrucción
+    private float destructionEffectDuration;
+    public CommandDestroy(Tile tileToDestroy, TileDestructionEffect destructionEffect, float duration)
+    {
+        // Guarda los valores recibidos en los campos correspondientes
+        this.tileToDestroy = tileToDestroy;
+        this.destructionEffect = destructionEffect;
+        this.destructionEffectDuration = duration;
+        // Guarda el tipo de la casilla antes de destruirla
+        this.tileTypeBeforeDestroy = tileToDestroy.tileType;
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        // Llama al método Play del efecto de destrucción pasándole la posición de la casilla
+        destructionEffect.Play(tileToDestroy.transform.position);
+        // Escala la casilla a cero usando DOTween y al completarse la destruye y la pone en null en la matriz del tablero
+        tileToDestroy.transform.DOScale(Vector3.zero, destructionEffectDuration)
+            .OnComplete(() =>
+            {
+                GameObject.Destroy(tileToDestroy.gameObject);
+                Board board = GameObject.FindObjectOfType<Board>();
+                board.tileMatrix[tileToDestroy.x, tileToDestroy.y] = null;
+            });
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        // Crea una nueva casilla en la posición de la casilla destruida usando el método CreateAndSetUpTile del TileManager
+        Board board = GameObject.FindObjectOfType<Board>();
+        TileManager tileManager = new TileManager(board.tileMatrix, board.tilePrefab, board.tiles, board.swapDuration, board.transform);
+        tileManager.CreateAndSetUpTile(tileToDestroy.x, tileToDestroy.y);
+        // Asigna el tipo guardado a la nueva casilla y actualiza su sprite
+        Tile newTile = board.tileMatrix[tileToDestroy.x, tileToDestroy.y];
+        newTile.tileType = tileTypeBeforeDestroy;
+        tileManager.SetTileSprite(newTile.gameObject, tileTypeBeforeDestroy);
+        // Escala la nueva casilla desde cero usando DOTween y al completarse le asigna el valor de isFullySpawned a true
+        newTile.transform.localScale = Vector3.zero;
+        newTile.transform.DOScale(Vector3.one, destructionEffectDuration)
+            .OnComplete(() =>
+            {
+                newTile.SetIsFullySpawned(true);
+            });
+    }
+
+} 
+File: CommandMove.cs 
+﻿using UnityEngine;
+
+public class CommandMove : Command
+{
+    // Un campo para guardar la referencia a la casilla a mover
+    private Tile tileToMove;
+    // Un campo para guardar las coordenadas originales de la casilla antes de moverla
+    private int originalX, originalY;
+    // Un campo para guardar las coordenadas nuevas de la casilla después de moverla
+    private int newX, newY;
+    // Un campo para guardar la duración del movimiento
+    private float moveDuration;
+
+    // El constructor recibe la casilla a mover, las coordenadas nuevas y la duración
+    public CommandMove(Tile tileToMove, int newX, int newY, float duration)
+    {
+        // Guarda los valores recibidos en los campos correspondientes
+        this.tileToMove = tileToMove;
+        this.newX = newX;
+        this.newY = newY;
+        this.moveDuration = duration;
+        // Guarda las coordenadas originales de la casilla antes de moverla
+        this.originalX = tileToMove.x;
+        this.originalY = tileToMove.y;
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        // Llama al método MoveToPosition de la casilla pasándole las coordenadas nuevas y la duración
+        tileToMove.MoveToPosition(newX, newY, moveDuration);
+        // Actualiza las coordenadas de la casilla y su posición en la matriz del tablero
+        Board board = GameObject.FindObjectOfType<Board>();
+        board.tileMatrix[originalX, originalY] = null;
+        board.tileMatrix[newX, newY] = tileToMove;
+        tileToMove.x = newX;
+        tileToMove.y = newY;
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        // Llama al método MoveToPosition de la casilla pasándole las coordenadas originales y la duración
+        tileToMove.MoveToPosition(originalX, originalY, moveDuration);
+        // Actualiza las coordenadas de la casilla y su posición en la matriz del tablero
+        Board board = GameObject.FindObjectOfType<Board>();
+        board.tileMatrix[newX, newY] = null;
+        board.tileMatrix[originalX, originalY] = tileToMove;
+        tileToMove.x = originalX;
+        tileToMove.y = originalY;
+    }
+} 
+File: GameController.cs 
+using UnityEngine;
+
+public class GameController : MonoBehaviour
+{
+    public static GameController Instance;
+    public GameModel model;
+    public GameView view;
+
+    private int currentLevel = 0;
+    [Header("Timers")] [SerializeField] private float checkConditionInterval = 1f;
+    private float elapsedTime = 0;
+
+    void Awake()
+    {
+        if (Instance == null)
+        {
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+        else
+        {
+            Destroy(gameObject);
+        }
+    }
+
+    void Start()
+    {
+        InitializeLevel(currentLevel);
+        view.inputHandler.onTilesSwapped.AddListener(OnTilesSwapped);
+        view.board.onMatchStart.AddListener(OnMatchStart);
+        view.board.onBoardRefillComplete.AddListener(OnBoardRefillComplete);
+        model.OnScoreChanged.AddListener((s) => CheckGameState());
+        view.OnTileMatchFound.AddListener(OnTileMatchFound);
+
+        elapsedTime = 0f;
+    }
+
+    public void InitializeLevel(int levelIndex)
+    {
+        currentLevel = levelIndex;
+        LevelObjective objective = model.levels[currentLevel];
+        model.moves = objective.maxMoves;
+        model.totalTime = objective.maxTime;
+        model.remainingTime = model.totalTime;
+        model.score = 0;
+        model.comboMultiplier = 1;
+    }
+
+    void Update()
+    {
+        if (model.remainingTime > 0)
+        {
+            model.remainingTime -= Time.deltaTime;
+        }
+        else
+        {
+            model.remainingTime = 0;
+        }
+        CheckGameState();
+        CheckLoseCondition();
+    }
+
+    public void OnGameOver()
+    {
+        Debug.Log("You lost");
+        // TODO: Display "Game Over" message or other related GUI
+    }
+
+
+    public void IncreaseCombo()
+    {
+        model.SetComboMultiplier(model.GetComboMultiplier() + 1);
+    }
+    public void ResetCombo()
+    {
+        model.SetComboMultiplier(1);
+    }
+    public void OnTilesSwapped(Tile tileA, Tile tileB)
+    {
+        StartCoroutine(view.board.SwapTiles(tileA, tileB));
+        model.ConsumeMove();
+        CheckGameState();
+    }
+
+    void OnMatchStart()
+    {
+        // Implement any logic needed on a match start, e.g. play a sound effect or show an animation
+    }
+
+    void OnBoardRefillComplete()
+    {
+        // Implement any logic needed when the board refilling is completed, e.g. update UI or check for win/lose conditions
+    }
+
+    private void CheckGameState()
+    {
+        CheckWinCondition();
+        CheckLoseCondition();
+    }
+
+    private void CheckWinCondition()
+    {
+        LevelObjective levelObjective = model.levels[model.currentLevel];
+
+        // Check if all victory conditions are met
+        bool allConditionsMet = true;
+        foreach (VictoryCondition condition in levelObjective.victoryConditions)
+        {
+            if (!condition.IsConditionMet(model))
+            {
+                allConditionsMet = false;
+                break;
+            }
+        }
+
+        if (allConditionsMet)
+        {
+            OnLevelComplete();
+        }
+    }
+
+    private void OnLevelComplete()
+    {
+        // Implement logic for moving to the next level or showing a "Level Complete" message
+        if (model.currentLevel < model.levels.Length - 1)
+        {
+            model.currentLevel++;
+            InitializeLevel(model.currentLevel);
+        }
+        else
+        {
+            // Game completed (all levels completed)
+        }
+    }
+
+    private void CheckLoseCondition()
+    {
+        LevelObjective levelObjective = model.levels[model.currentLevel];
+        foreach (LoseCondition loseCondition in levelObjective.loseConditions)
+        {
+            if (loseCondition.IsConditionMet(model))
+            {
+                OnGameOver();
+                break;
+            }
+        }
+    }
+
+    void OnTileMatchFound(int tileType, int numOfMatchedTiles)
+    {
+        // Handle the matched tiles in this method.
+        // Example: Add score based on the number of matched tiles and tile type
+    }
+} 
+File: GameModel.cs 
+﻿using UnityEngine;
+using UnityEngine.Events;
+
+
+public class GameModel : MonoBehaviour
+{
+    public int score;
+    public int moves;
+    public int comboMultiplier;
+    public int currentLevel;
+    
+    public LevelObjective[] levels;
+    public float totalTime;
+    public float remainingTime;
+    public UnityEvent<int> OnScoreChanged;
+    public UnityEvent<int,int> OnTileMatchFound;
+
+    public int CurrentLevel => currentLevel;
+
+    public void ResetComboMultiplier()
+    {
+        comboMultiplier = 1;
+    }
+
+    public void IncreaseComboMultiplier()
+    {
+        comboMultiplier++;
+    }
+    public void ConsumeMove()
+    {
+        moves--;
+        comboMultiplier = 1;
+    }
+    public void AddScore(int value)
+    {
+        score += value * comboMultiplier;
+        OnScoreChanged.Invoke(score);
+    }
+   
+    public int GetScore()
+    {
+        return score;
+    }
+
+    public void SetScore(int value)
+    {
+        score = value;
+    }
+
+    public int GetMoves()
+    {
+        return moves;
+    }
+
+    public void SetMoves(int value)
+    {
+        moves = value;
+    }
+
+    public int GetComboMultiplier()
+    {
+        return comboMultiplier;
+    }
+
+    public void SetComboMultiplier(int value)
+    {
+        comboMultiplier = value;
+    }
+} 
+File: GameView.cs 
+﻿using UnityEngine;
+using UnityEngine.Events;
+
+public class GameView : MonoBehaviour
+{
+    public Board board;
+    public UIManager uiManager;
+    public InputHandler inputHandler;
+
+    // The rest of the GameView methods will use board, uiManager and inputHandler
+    // to manage visuals, animations, UI-events as well as any other UI-related tasks
+    
+    
+    public UnityEvent<int,int> OnTileMatchFound
+    {
+        get { return board.onTileMatchFound; }
+    }
+} 
+File: InputHandler.cs 
+﻿using System;
+using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.InputSystem;
+using UnityEngine.Serialization;
+
+public class InputHandler : MonoBehaviour
+{
+   
+    [FormerlySerializedAs("OnTilesSwapped")] public  UnityEvent<Tile, Tile> onTilesSwapped;
+    private Board board;
+    private Tile selectedTile;
+    private Camera mainCamera;
+    private float maxTimeWithoutInput = 10f;
+    private float currentTimeWithoutInput;
+    public UnityEvent onNoInputForLongTime;
+    void Awake()
+    {
+        if (onTilesSwapped == null)
+        {
+            onTilesSwapped = new  UnityEvent<Tile, Tile>();
+        }
+    }
+
+    void Start()
+    {
+        board = FindObjectOfType<Board>();
+        mainCamera = Camera.main;
+    }
+
+    void Update()
+    {
+        if (Touchscreen.current != null && Touchscreen.current.primaryTouch.press.wasPressedThisFrame)
+        {
+            Vector2 touchPosition =
+                mainCamera.ScreenToWorldPoint(Touchscreen.current.primaryTouch.position.ReadValue());
+            HandleInput(touchPosition);
+        }
+
+        if (Mouse.current.leftButton.wasPressedThisFrame)
+        {
+            Vector2 mousePosition = mainCamera.ScreenToWorldPoint(Mouse.current.position.ReadValue());
+            HandleInput(mousePosition);
+        }
+        currentTimeWithoutInput = Mathf.Min(currentTimeWithoutInput + Time.deltaTime,currentTimeWithoutInput);
+        if (currentTimeWithoutInput==maxTimeWithoutInput)
+        {
+            onNoInputForLongTime?.Invoke();
+            currentTimeWithoutInput = 0;
+        }
+    }
+
+    private void HandleInput(Vector2 position)
+    {
+        RaycastHit2D hit = Physics2D.Raycast(position, Vector2.zero);
+        if (hit.collider != null)
+        {
+            Tile selectedTile = hit.collider.GetComponentInParent<Tile>();
+            SelectTile(selectedTile);
+        }
+    }
+
+    private void SelectTile(Tile tile)
+    {
+        if (tile == null || !tile.IsFullySpawned()) return;
+        if (selectedTile == null)
+        {
+            selectedTile = tile;
+        }
+        else
+        {
+            if (board.AreTilesAdjacent(selectedTile, tile))
+            {
+                onTilesSwapped.Invoke(selectedTile, tile);
+                selectedTile = null;
+            }
+            else
+            {
+                selectedTile = tile;
+            }
+        }
+    }
+} 
+File: LevelObjective.cs 
+﻿[System.Serializable]
+public class LevelObjective
+{
+    public VictoryCondition[] victoryConditions;
+    public LoseCondition[] loseConditions;
+
+    public int targetScore;
+    public int maxMoves;
+    public float maxTime;
+    public int refillType; // 1: Spawn new tiles, 2: Falling tiles from above
+
+} 
+File: LimitedMovesVictoryCondition.cs 
+﻿using UnityEngine;
+
+[CreateAssetMenu(menuName = "VictoryCondition/LimitedMoves")]
+public class LimitedMovesVictoryCondition : VictoryCondition
+{
+    public int maxMoves;
+
+    public override bool IsConditionMet(GameModel model)
+    {
+        return model.score >= model.levels[model.currentLevel].targetScore && model.moves >= 0;
+    }
+} 
+File: LoseCondition.cs 
+﻿using UnityEngine;
+
+public abstract class LoseCondition :ScriptableObject
+{
+    public abstract bool IsConditionMet(GameModel model);
+} 
+File: MatchChecker.cs 
+﻿using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.Events;
+
+public class MatchChecker
+{
+    private Tile[,] _tileMatrix;
+    private int _width;
+    private int _height;
+    public UnityEvent<int, int> OnTileMatchFound = new UnityEvent<int, int>();
+    public MatchChecker(Tile[,] tileMatrix, int width, int height)
+    {
+        _tileMatrix = tileMatrix;
+        _width = width;
+        _height = height;
+        OnTileMatchFound = new UnityEvent<int, int>();
+        BoardRefiller.onTileFullSpawn.AddListener(OnTileFullSpawns);
+    }
+
+    private void OnTileFullSpawns(Tile spawnedTile)
+    {
+        CheckForMatchesAt(spawnedTile.x, spawnedTile.y);
+        
+    }
+
+    public List<Tile> CheckForMatchesAt(int x, int y)
+    {
+        Tile tile = _tileMatrix[x, y];
+        if (tile  == null || !tile.IsFullySpawned())
+        {
+            Debug.LogError("Not tile at pos x: " + x + " y: " + y);
+            return new List<Tile>();
+        }
+
+        List<Tile> matchedTiles = new List<Tile>();
+
+        List<Tile> horizontalMatches = CheckHorizontalMatchesAt(x, y);
+        List<Tile> verticalMatches = CheckVerticalMatchesAt(x, y);
+
+        if (horizontalMatches.Count > 0)
+        {
+            matchedTiles.Add(_tileMatrix[x, y]);
+            matchedTiles.AddRange(horizontalMatches);
+        }
+
+        if (verticalMatches.Count > 0)
+        {
+            if (!matchedTiles.Contains(_tileMatrix[x, y]))
+            {
+                matchedTiles.Add(_tileMatrix[x, y]);
+            }
+            matchedTiles.AddRange(verticalMatches);
+        }
+
+        return matchedTiles;
+    }
+
+    private List<Tile> CheckHorizontalMatchesAt(int x, int y)
+    {
+        List<Tile> leftMatches = CheckMatchesInDirection(x, y, Vector2.left);
+        List<Tile> rightMatches = CheckMatchesInDirection(x, y, Vector2.right);
+        List<Tile> horizontalMatches = new List<Tile>(leftMatches);
+        horizontalMatches.AddRange(rightMatches);
+
+        if (GetTileAt(x,y).GetMinimumTileCountForMatch()<=horizontalMatches.Count+1)
+        {
+         
+            return horizontalMatches;
+            
+        }
+        return new List<Tile>();
+    }
+    
+    private List<Tile> CheckVerticalMatchesAt(int x, int y)
+    {
+        List<Tile> upMatches = CheckMatchesInDirection(x, y, Vector2.up);
+        List<Tile> downMatches = CheckMatchesInDirection(x, y, Vector2.down);
+        List<Tile> verticalMatches = new List<Tile>(upMatches);
+        verticalMatches.AddRange(downMatches);
+
+        if (GetTileAt(x,y).GetMinimumTileCountForMatch()<= verticalMatches.Count+1)
+        {
+         
+            return verticalMatches;
+            
+        }
+        return new List<Tile>();
+    }
+
+    private List<Tile> CheckMatchesInDirection(int x, int y, Vector2 direction)
+    {
+        List<Tile> matchedTiles = new List<Tile>();
+
+        Tile currentTile = _tileMatrix[x, y];
+        
+        if (!currentTile || !currentTile.IsFullySpawned())
+        {
+            return matchedTiles;
+        }
+        int currentType = currentTile.tileType;
+
+        int xOffset = (int)direction.x;
+        int yOffset = (int)direction.y;
+
+        for (int i = 1; i < Mathf.Max(_width, _height); i++)
+        {
+            int newX = x + xOffset * i;
+            int newY = y + yOffset * i;
+
+            if (newX >= 0 && newX < _width && newY >= 0 && newY < _height)
+            {
+                Tile nextTile = _tileMatrix[newX, newY];
+                if (nextTile != null && nextTile.tileType == currentType)
+                {
+                    matchedTiles.Add(nextTile);
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        return matchedTiles;
+    }
+
+    public List<Tile> FindAllMatches()
+    {
+        List<Tile> result = new List<Tile>();
+
+        for (int i = 0; i < _width; i++)
+        {
+            for (int j = 0; j < _height; j++)
+            {
+                List<Tile> matches = CheckForMatchesAt(i, j);
+
+                if (matches.Count >= 1) // Change to work with a minimum match of two tiles
+                {
+                    result.AddRange(matches);
+                }
+            }
+        }
+
+        return result;
+    }
+    public Tile GetTileAt(int x, int y)
+    {
+        if (x >= 0 && x < _width && y >= 0 && y < _height)
+        {
+            return _tileMatrix[x, y];
+        }
+        else
+        {
+            return null;
+        }
+    }
+} 
+File: OutOfMovesLoseCondition.cs 
+﻿using UnityEngine;
+
+[CreateAssetMenu(menuName = "LoseCondition/OutOfMoves")]
+public class OutOfMovesLoseCondition : LoseCondition
+{
+    public override bool IsConditionMet(GameModel model)
+    {
+        return model.moves <= 0;
+    }
+} 
+File: OutOfTimeLoseCondition.cs 
+﻿using UnityEngine;
+
+[CreateAssetMenu(menuName = "LoseCondition/OutOfTime")]
+public class OutOfTimeLoseCondition : LoseCondition
+{
+    public override bool IsConditionMet(GameModel model)
+    {
+        return model.remainingTime <= 0;
+    }
+} 
+File: ScoreVictoryCondition.cs 
+﻿using UnityEngine;
+
+[CreateAssetMenu(menuName = "VictoryCondition/Score")]
+public class ScoreVictoryCondition : VictoryCondition
+{
+    public int targetScore;
+
+    public override bool IsConditionMet(GameModel model)
+    {
+        return model.score >= targetScore;
+    }
+} 
+File: Tile.cs 
+﻿using DG.Tweening;
+using UnityEngine;
+
+public class Tile : MonoBehaviour
+{
+    public int x;
+    public int y;
+    public int tileType;
+    private bool isFullySpawned;
+    [SerializeField] int numberOfSameTilesToMatch;
+
+    public void Init(int xPos, int yPos, int type)
+    {
+        x = xPos;
+        y = yPos;
+        tileType = type;
+    }
+
+    public void MoveToPosition(int newX, int newY, float duration)
+    {
+        x = newX;
+        y = newY;
+        isFullySpawned = false;
+
+        transform.DOMove(new Vector2(x, y), duration)
+            .OnComplete(() => { isFullySpawned = true; });
+    }
+
+
+    public bool IsFullySpawned()
+    {
+        return isFullySpawned;
+    }
+
+    public void SetIsFullySpawned(bool value)
+    {
+        isFullySpawned = value;
+    }
+
+    public int GetMinimumTileCountForMatch()
+    {
+        return numberOfSameTilesToMatch;
+    }
+} 
+File: TileDestructionEffect.cs 
+﻿using UnityEngine;
+
+public class TileDestructionEffect : MonoBehaviour
+{
+    [Header("Effect Settings")]
+    [SerializeField] private float destructionEffectDuration = 5f;
+
+    private ParticleSystem particleSystem;
+
+    private void Start()
+    {
+        particleSystem = GetComponent<ParticleSystem>();
+        SetParticleSystemDuration();
+    }
+
+    private void SetParticleSystemDuration()
+    {
+        particleSystem.Stop(true, ParticleSystemStopBehavior.StopEmittingAndClear);
+        var main = particleSystem.main;
+        main.duration = destructionEffectDuration;
+    }
+
+    public void Play(Vector2 position)
+    {
+        transform.position = position;
+        particleSystem.Play();
+    }
+
+    private void Update()
+    {
+        if (particleSystem && !particleSystem.IsAlive())
+        {
+            particleSystem.Clear();
+            particleSystem.Stop();
+        }
+    }
+} 
+File: TileManager.cs 
+﻿using System.Collections;
+using UnityEngine;
+
+public class TileManager
+{
+    private Tile[,] _tileMatrix;
+    private GameObject _tilePrefab;
+    private GameObject[] _tiles;
+    private float _swapDuration;
+
+ 
+    private Transform _parentTransform;
+private BoardCommandManager _boardCommandManager;
+    public TileManager(Tile[,] tileMatrix, GameObject tilePrefab, GameObject[] tiles, float swapDuration, Transform parentTransform)
+    {
+        _tileMatrix = tileMatrix;
+        _tilePrefab = tilePrefab;
+        _tiles = tiles;
+        _swapDuration = swapDuration;
+        _parentTransform = parentTransform;
+        _boardCommandManager = BoardCommandManager.instance;
+    }
+
+    public void CreateAndSetUpTile(int x, int y)
+    {
+        GameObject newTile = Object.Instantiate(_tilePrefab, new Vector2(x, y), Quaternion.identity);
+        newTile.transform.SetParent(_parentTransform);
+
+        int randomTile = GetRandomTileIndex(x, y);
+        SetTileSprite(newTile, randomTile);
+
+        _tileMatrix[x, y] = newTile.GetComponent<Tile>();
+        _tileMatrix[x, y].Init(x, y, randomTile);
+        _tileMatrix[x, y].SetIsFullySpawned(true);  // Set IsFullySpawned to true for initial tiles
+    }
+
+    public IEnumerator SwapTiles(Tile tileA, Tile tileB)
+    {
+        int tileAX = tileA.x;
+        int tileAY = tileA.y;
+        int tileBX = tileB.x;
+        int tileBY = tileB.y;
+        _boardCommandManager.AddAndDoCommand(new CommandMove( tileA,tileBX, tileBY, _swapDuration));
+        _boardCommandManager.AddAndDoCommand(new CommandMove( tileB,tileAX, tileAY, _swapDuration));
+        _tileMatrix[tileAX, tileAY] = tileB;
+        _tileMatrix[tileBX, tileBY] = tileA;
+        tileA.x = tileBX;
+        tileA.y = tileBY;
+        tileB.x = tileAX;
+        tileB.y = tileAY;
+
+        yield return new WaitForSeconds(_swapDuration);
+    }
+
+    private int GetRandomTileIndex(int x, int y)
+    {
+        int randomTile;
+
+        do
+        {
+            randomTile = Random.Range(0, _tiles.Length);
+        } while(CreatesInitialMatch(x, y, randomTile));
+
+        return randomTile;
+    }
+
+    private bool CreatesInitialMatch(int x, int y, int tileType)
+    {
+        if (x > 1 && tileType == _tileMatrix[x - 1, y]?.tileType && tileType == _tileMatrix[x - 2, y]?.tileType)
+        {
+            return true;
+        }
+
+        if (y > 1 && tileType == _tileMatrix[x, y - 1]?.tileType && tileType == _tileMatrix[x, y - 2]?.tileType)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    internal void SetTileSprite(GameObject tileObject, int tileIndex)
+    {
+        SpriteRenderer renderer = tileObject.GetComponentInChildren<SpriteRenderer>();
+        renderer.sprite = _tiles[tileIndex].GetComponentInChildren<SpriteRenderer>().sprite;
+    }
+} 
+File: UIManager.cs 
+﻿using TMPro;
+using UnityEngine;
+
+public class UIManager : MonoBehaviour
+{
+    public TextMeshProUGUI scoreText;
+    public TextMeshProUGUI movesText;
+    public TextMeshProUGUI timeText;
+    public TextMeshProUGUI levelText;
+    public TextMeshProUGUI targetScoreText;
+
+    private GameModel _gameModel;
+
+    void Start()
+    {
+        _gameModel = FindObjectOfType<GameModel>();
+        _gameModel.OnScoreChanged.AddListener(UpdateScoreText);    }
+
+    void Update()
+    {
+        RefreshUI();
+    }
+
+    private void RefreshUI()
+    {
+        movesText.text = $"Moves: {_gameModel.moves}";
+        timeText.text = $"Time: {_gameModel.remainingTime:F0}s";
+        levelText.text = $"Level: {_gameModel.CurrentLevel + 1}";
+        targetScoreText.text = $"Target: {_gameModel.levels[_gameModel.CurrentLevel].targetScore}";
+    }
+    
+    public void UpdateScoreText(int newScore)
+    {
+        scoreText.text = $"Score: {newScore}";
+    }
+} 
+File: VictoryCondition.cs 
+﻿using UnityEngine;
+
+[System.Serializable]
+[CreateAssetMenu(menuName = "VictoryCondition/Base")]
+public abstract class VictoryCondition : ScriptableObject
+{
+    public abstract bool IsConditionMet(GameModel model);
+} 
