@@ -38,15 +38,11 @@ public class Board : MonoBehaviour
 
     private void OnEnable()
     {
-        inputHandler.onNoInputForLongTime.AddListener(ShowHint);
-        inputHandler.onInputAfterNoInputForLongTime.AddListener(HideHint);
-    }
+        }
 
     private void OnDisable()
     {
-        inputHandler.onNoInputForLongTime.RemoveListener(ShowHint);
-        inputHandler.onInputAfterNoInputForLongTime.RemoveListener(HideHint);
-    }
+     }
 
     public void Awake()
     {
@@ -217,52 +213,7 @@ public class Board : MonoBehaviour
         tileMatrix = newMatrix;
     }
 
-    Tile FindHintTile()
-    {
-        // Loop through all tiles in the board
-        for (int i = 0; i < width; i++)
-        {
-            for (int j = 0; j < height; j++)
-            {
-                Tile currentTile = tileMatrix[i, j];
-                if (currentTile == null || !currentTile.IsFullySpawned()) continue;
-
-//Horizontal check
-                if (i < width - 1 && AreTilesAdjacent(currentTile, tileMatrix[i + 1, j]))
-                {
-                    SwapTilesInMatrix(currentTile, tileMatrix[i + 1, j]);
-                    List<Tile> matches = CheckForMatchesAt(i + 1, j);
-                    List<Tile> matchesB = CheckForMatchesAt(i, j);
-                    matches.AddRange(matchesB);
-                    SwapTilesInMatrix(currentTile, tileMatrix[i + 1, j]);
-                    if (matches.Count > 0)
-                    {
-                        return currentTile;
-                    }
-                }
-//Vertical check
-
-                if (j < height - 1 && AreTilesAdjacent(currentTile, tileMatrix[i, j + 1]))
-                {
-                    // Swap the tiles temporarily
-                    SwapTilesInMatrix(currentTile, tileMatrix[i, j + 1]);
-                    // Check for matches at the swapped positions
-                    List<Tile> matches = CheckForMatchesAt(i, j + 1);
-                    List<Tile> matchesB = CheckForMatchesAt(i, j);
-                    matches.AddRange(matchesB);
-                    // Swap the tiles back to the original positions
-                    SwapTilesInMatrix(currentTile, tileMatrix[i, j + 1]);
-                    // If there are matches, return the current tile as a hint
-                    if (matches.Count > 0)
-                    {
-                        return currentTile;
-                    }
-                }
-            }
-        }
-        // If no matches are found, return null
-        return null;
-    }
+    
 
     private void SwapTilesInMatrix(Tile tileA, Tile tileB)
     {
@@ -276,32 +227,9 @@ public class Board : MonoBehaviour
         tileA.y = tileBY;
         tileB.x = tileAX;
         tileB.y = tileAY;
-    }
+    } 
 
-    private List<Tile> hintedTiles;
-
-    private void ShowHint()
-    {
-        hintedTiles = FindHint();
-        foreach (Tile tile in hintedTiles)
-        {
-            tile.Highlight(true);
-        }
-    }
-
-
-    private void HideHint()
-    {
-        if (hintedTiles != null)
-        {
-            foreach (Tile tile in hintedTiles)
-            {
-                tile.Highlight(false);
-            }
-        }
-    }
-
-    private List<Tile> FindHint()
+    public List<Tile> FindHint()
     {
         for (int x = 0; x < width; x++)
         {
@@ -342,9 +270,7 @@ public class Board : MonoBehaviour
 
     private void SwapTilesAt(int x1, int y1, int x2, int y2)
     {
-        Tile tempTile = tileMatrix[x1, y1];
-        tileMatrix[x1, y1] = tileMatrix[x2, y2];
-        tileMatrix[x2, y2] = tempTile;
+        (tileMatrix[x1, y1], tileMatrix[x2, y2]) = (tileMatrix[x2, y2], tileMatrix[x1, y1]);
     }
 
     private bool IsValidCoordinate(int x, int y)
