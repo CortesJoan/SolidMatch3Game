@@ -50,15 +50,17 @@ public class BoardRefiller
             {
                 if (_tileMatrix[i, j] == null)
                 {
-                    SpawnNewTileAt(i, j);
+                    int randomTile = GetRandomTileIndex(i, j);
+                    BoardCommandManager.instance.AddAndDoCommand(new CommandCreateTile(this,    GameObject.FindObjectOfType<Board>().GetTileManager(), i, j, randomTile)); 
                 }
             }
         }
     }
 
-    private Tile SpawnNewTileAt(int x, int y)
+    internal Tile SpawnNewRandomTileAt(int x, int y)
     {
-        GameObject newTile = Object.Instantiate(_tilePrefab, new Vector2(x, y), Quaternion.identity);
+        GameObject newTile = Object.Instantiate(_tilePrefab,  _parentTransform);
+        newTile.transform.localPosition = new Vector2(x, y);
         newTile.transform.SetParent(_parentTransform);
         int randomTile = GetRandomTileIndex(x, y);
         SetTileSprite(newTile, randomTile);
@@ -81,7 +83,9 @@ public class BoardRefiller
 
         do
         {
-            randomTile = Random.Range(0, _tiles.Length);
+            CommandSaveLoadRandomState commandSaveLoadRandomState =  new CommandSaveLoadRandomState(0, _tiles.Length);
+            BoardCommandManager.instance.AddAndDoCommandToTheLastGroup(commandSaveLoadRandomState);
+            randomTile =commandSaveLoadRandomState.result;
         } while (CreatesInitialMatch(x, y, randomTile));
 
         return randomTile;
@@ -134,7 +138,7 @@ public class BoardRefiller
                     }
                     else
                     {
-                        SpawnNewTileAt(x, _height - 1);
+                        SpawnNewRandomTileAt(x, _height - 1);
                         _tileMatrix[x, _height - 1].transform.position = new Vector3(x, _height, 0);
                         _tileMatrix[x, _height - 1].MoveToPosition(x, y, 0.5f);
                         _tileMatrix[x, _height - 1].y = y;

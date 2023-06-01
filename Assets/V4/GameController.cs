@@ -28,12 +28,13 @@ public class GameController : MonoBehaviour
     {
         InitializeLevel(currentLevel);
         view.inputHandler.onTilesSwapped.AddListener(OnTilesSwapped);
+        view.board.onMatch.AddListener(OnMatch);
         view.board.onMatchStart.AddListener(OnMatchStart);
         view.board.onBoardRefillComplete.AddListener(OnBoardRefillComplete);
         model.OnScoreChanged.AddListener((s) => CheckGameState());
         view.OnTileMatchFound.AddListener(OnTileMatchFound);
-        currentRandomSeed=     UnityEngine.Random.seed; 
-        
+        currentRandomSeed = UnityEngine.Random.seed;
+
         elapsedTime = 0f;
     }
 
@@ -45,7 +46,7 @@ public class GameController : MonoBehaviour
         model.totalTime = objective.maxTime;
         model.remainingTime = model.totalTime;
         model.score = 0;
-        model.SetComboMultiplier(1);  
+        model.SetComboMultiplier(1);
     }
 
     void Update()
@@ -73,15 +74,18 @@ public class GameController : MonoBehaviour
     {
         model.SetComboMultiplier(model.GetComboMultiplier() + 1);
     }
+
     public void ResetCombo()
     {
         model.SetComboMultiplier(1);
     }
+
     public void OnTilesSwapped(Tile tileA, Tile tileB)
     {
         StartCoroutine(view.board.SwapTiles(tileA, tileB));
         model.ConsumeMove();
         CheckGameState();
+        
     }
 
     void OnMatchStart()
@@ -152,5 +156,11 @@ public class GameController : MonoBehaviour
     {
         // Handle the matched tiles in this method.
         // Example: Add score based on the number of matched tiles and tile type
+    }
+    
+
+    private void OnMatch()
+    {
+        IncreaseCombo();
     }
 }

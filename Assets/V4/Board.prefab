@@ -1,0 +1,88 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1 &3719482063014622060
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 3719482063014622066}
+  - component: {fileID: 3719482063014622067}
+  - component: {fileID: 3719482063014622065}
+  m_Layer: 0
+  m_Name: Board
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &3719482063014622066
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3719482063014622060}
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 0, y: 0, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_RootOrder: 0
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &3719482063014622067
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3719482063014622060}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b6dd59aadea3444b8ba26579cc2d923a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  width: 3
+  height: 3
+  tilePrefab: {fileID: 5488768066051112463, guid: ec162fb3a3df72b4eabf82f3cd45b8b2, type: 3}
+  tiles:
+  - {fileID: 5488768066051112463, guid: ec162fb3a3df72b4eabf82f3cd45b8b2, type: 3}
+  - {fileID: 2932155076807324950, guid: 7e90cdf4b30d2ee44b40c9043049aa74, type: 3}
+  - {fileID: 6614384208143752519, guid: d81c768b8e3d6b94c83c2c911285f771, type: 3}
+  onMatchStart:
+    m_PersistentCalls:
+      m_Calls: []
+  onMatch:
+    m_PersistentCalls:
+      m_Calls: []
+  onBoardRefillComplete:
+    m_PersistentCalls:
+      m_Calls: []
+  onBoardTileIsdestroyed:
+    m_PersistentCalls:
+      m_Calls: []
+  refillType: 1
+  swapDuration: 0.5
+  waitForRefillDelay: 0.5
+  matchClearTime: 0.5
+  prechargedTiles: []
+--- !u!114 &3719482063014622065
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 3719482063014622060}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: b16cd46998274580882ce14c6b383efa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  groupCommands: []
+  performedCommands: []
+  references:
+    version: 2
+    RefIds: []

@@ -28,7 +28,7 @@ public class MatchChecker
         Tile tile = _tileMatrix[x, y];
         if (tile  == null || !tile.IsFullySpawned())
         {
-            Debug.LogError("Not tile at pos x: " + x + " y: " + y);
+            Debug.LogWarning("Not tile at pos x: " + x + " y: " + y);
             return new List<Tile>();
         }
 

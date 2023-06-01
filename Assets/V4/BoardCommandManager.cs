@@ -2,10 +2,13 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-class BoardCommandManager : MonoBehaviour
+public class BoardCommandManager : MonoBehaviour
 {
     private Board board;
-    [SerializeField] private List<Command> performedCommands;
+
+    [SerializeReference] private List<GroupCommand> groupCommands;
+
+    [SerializeReference, SubclassSelector] private List<Command> performedCommands;
     public static BoardCommandManager instance;
 
     private void Awake()
@@ -18,14 +21,15 @@ class BoardCommandManager : MonoBehaviour
     {
         board = GetComponent<Board>();
         performedCommands = new List<Command>();
+        groupCommands = new List<GroupCommand>();
     }
 
-    public void AddCommand(Command command)
+    void AddCommand(Command command)
     {
         performedCommands.Add(command);
     }
 
-    public void DoCommand(int commandIndex)
+    void DoCommand(int commandIndex)
     {
         if (commandIndex < 0 || commandIndex >= performedCommands.Count)
         {
@@ -34,7 +38,7 @@ class BoardCommandManager : MonoBehaviour
         performedCommands[commandIndex].DoCommand();
     }
 
-    public void UndoLastCommand()
+    void UndoLastCommand()
     {
         if (performedCommands.Count == 0)
         {
@@ -44,9 +48,36 @@ class BoardCommandManager : MonoBehaviour
         performedCommands.Remove(performedCommands[^1]);
     }
 
+    public void UndoLastGroupCommand()
+    {
+        if (performedCommands.Count == 0 || groupCommands.Count == 0)
+        {
+            return;
+        }
+        var groupCommand = groupCommands[^1];
+        groupCommand.UndoCommandsInGroup();
+        foreach (var command in groupCommand.GetCommandsInGroup())
+        {
+            performedCommands.Remove(command);
+        }
+        groupCommands.Remove(groupCommand);
+    }
+
     public void AddAndDoCommand(Command command)
     {
         performedCommands.Add(command);
         command.DoCommand();
     }
-}
+
+    public void AddAndDoCommandToTheLastGroup(Command command)
+    {
+        groupCommands[^1].AddCommandToGroup(command);
+        performedCommands.Add(command);
+        command.DoCommand();
+    }
+
+    public void CreateNewCommandGroup(string name)
+    {
+        groupCommands.Add(new GroupCommand(name));
+    }
+}     

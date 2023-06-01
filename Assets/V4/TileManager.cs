@@ -8,30 +8,31 @@ public class TileManager
     private GameObject[] _tiles;
     private float _swapDuration;
 
- 
+
     private Transform _parentTransform;
-private BoardCommandManager _boardCommandManager;
-    public TileManager(Tile[,] tileMatrix, GameObject tilePrefab, GameObject[] tiles, float swapDuration, Transform parentTransform)
+    private BoardCommandManager _boardCommandManager;
+
+    public TileManager(Tile[,] tileMatrix, GameObject tilePrefab, GameObject[] tiles, float swapDuration,
+        Transform parentTransform)
     {
         _tileMatrix = tileMatrix;
         _tilePrefab = tilePrefab;
         _tiles = tiles;
         _swapDuration = swapDuration;
         _parentTransform = parentTransform;
-        _boardCommandManager = BoardCommandManager.instance;
+        _boardCommandManager =  parentTransform.GetComponent<BoardCommandManager>();
     }
 
     public void CreateAndSetUpTile(int x, int y)
     {
-        GameObject newTile = Object.Instantiate(_tilePrefab, new Vector2(x, y), Quaternion.identity);
-        newTile.transform.SetParent(_parentTransform);
-
+        GameObject newTile = Object.Instantiate(_tilePrefab, _parentTransform);
+        newTile.transform.localPosition = new Vector2(x, y);
         int randomTile = GetRandomTileIndex(x, y);
         SetTileSprite(newTile, randomTile);
 
         _tileMatrix[x, y] = newTile.GetComponent<Tile>();
         _tileMatrix[x, y].Init(x, y, randomTile);
-        _tileMatrix[x, y].SetIsFullySpawned(true);  // Set IsFullySpawned to true for initial tiles
+        _tileMatrix[x, y].SetIsFullySpawned(true); // Set IsFullySpawned to true for initial tiles
     }
 
     public IEnumerator SwapTiles(Tile tileA, Tile tileB)
@@ -40,8 +41,8 @@ private BoardCommandManager _boardCommandManager;
         int tileAY = tileA.y;
         int tileBX = tileB.x;
         int tileBY = tileB.y;
-        _boardCommandManager.AddAndDoCommand(new CommandMove( tileA,tileBX, tileBY, _swapDuration));
-        _boardCommandManager.AddAndDoCommand(new CommandMove( tileB,tileAX, tileAY, _swapDuration));
+        _boardCommandManager.AddAndDoCommandToTheLastGroup(new CommandMove(tileA, tileBX, tileBY, _swapDuration));
+        _boardCommandManager.AddAndDoCommandToTheLastGroup(new CommandMove(tileB, tileAX, tileAY, _swapDuration));
         _tileMatrix[tileAX, tileAY] = tileB;
         _tileMatrix[tileBX, tileBY] = tileA;
         tileA.x = tileBX;
@@ -55,11 +56,13 @@ private BoardCommandManager _boardCommandManager;
     private int GetRandomTileIndex(int x, int y)
     {
         int randomTile;
-
         do
         {
-            randomTile = Random.Range(0, _tiles.Length);
-        } while(CreatesInitialMatch(x, y, randomTile));
+            CommandSaveLoadRandomState commandSaveLoadRandomState =
+                new CommandSaveLoadRandomState(0, _tiles.Length);
+            _boardCommandManager.AddAndDoCommand(commandSaveLoadRandomState);
+            randomTile = commandSaveLoadRandomState.result;
+        } while (CreatesInitialMatch(x, y, randomTile));
 
         return randomTile;
     }
@@ -82,6 +85,8 @@ private BoardCommandManager _boardCommandManager;
     internal void SetTileSprite(GameObject tileObject, int tileIndex)
     {
         SpriteRenderer renderer = tileObject.GetComponentInChildren<SpriteRenderer>();
-        renderer.sprite = _tiles[tileIndex].GetComponentInChildren<SpriteRenderer>().sprite;
+        var prefabTile = _tiles[tileIndex].GetComponentInChildren<SpriteRenderer>();
+        renderer.sprite = prefabTile.sprite;
+        renderer.color = prefabTile.color;
     }
 }

@@ -10,6 +10,7 @@ GameObject:
   m_Component:
   - component: {fileID: 1414649047953199930}
   - component: {fileID: 8737440888448355461}
+  - component: {fileID: 3910739172613067478}
   m_Layer: 0
   m_Name: Tile
   m_TagString: Untagged
@@ -49,7 +50,21 @@ MonoBehaviour:
   x: 0
   y: 0
   tileType: 0
+  isFullySpawned: 0
   numberOfSameTilesToMatch: 3
+--- !u!114 &3910739172613067478
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 5488768066051112463}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: caa78c41b458ace4393fb188755b60b3, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  tile: {fileID: 8737440888448355461}
 --- !u!1 &5562954536031129986
 GameObject:
   m_ObjectHideFlags: 0

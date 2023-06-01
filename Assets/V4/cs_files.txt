@@ -1,5 +1,6 @@
 File: Board.cs 
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using DG.Tweening;
@@ -13,13 +14,13 @@ public class Board : MonoBehaviour
     public int height;
     public GameObject tilePrefab;
     public GameObject[] tiles;
-    public GameObject destructionEffectPrefab;
-    public UnityEvent onMatchStart;
-    public UnityEvent onBoardRefillComplete;
+    public UnityEvent onMatchStart = new UnityEvent();
+    public UnityEvent onMatch = new UnityEvent();
+    public UnityEvent onBoardRefillComplete = new UnityEvent();
+    public UnityEvent onBoardTileIsdestroyed = new UnityEvent();
     public int refillType;
 
-    internal Tile[,] tileMatrix;
-    private TileDestructionEffect destructionEffect;
+    [SerializeField] internal Tile[,] tileMatrix;
 
     private MatchChecker matchChecker;
     private TileManager tileManager;
@@ -30,26 +31,67 @@ public class Board : MonoBehaviour
     internal float swapDuration = 0.5f;
     [SerializeField] private float waitForRefillDelay = 0.5f;
     [SerializeField] private float matchClearTime = 0.5f;
- 
-    void Awake()
+
+    [Header("Debug")] [SerializeField] internal List<Tile> prechargedTiles = new List<Tile>();
+
+    [Header("Hint")] private Tile hintTile;
+
+    [SerializeField] InputHandler inputHandler;
+
+    private void OnEnable()
     {
-        tileMatrix = new Tile[width, height];
-
-        // Pass proper arguments to MatchChecker constructor
-        matchChecker = new MatchChecker(tileMatrix, width, height);
-
-        // Pass proper arguments to TileManager constructor
-        tileManager = new TileManager(tileMatrix, tilePrefab, tiles, swapDuration, transform);
-
-        // Pass proper arguments to BoardRefiller constructor
-        boardRefiller = new BoardRefiller(tileMatrix, tilePrefab, tiles, width, height, transform);
-
-        InitializeBoard();
-        boardCommandManager = GetComponent<BoardCommandManager>();
-        GameObject effect = Instantiate(destructionEffectPrefab);
-        destructionEffect = effect.GetComponent<TileDestructionEffect>();
+        inputHandler.onNoInputForLongTime.AddListener(ShowHint);
+        inputHandler.onInputAfterNoInputForLongTime.AddListener(HideHint);
     }
 
+    private void OnDisable()
+    {
+        inputHandler.onNoInputForLongTime.RemoveListener(ShowHint);
+        inputHandler.onInputAfterNoInputForLongTime.RemoveListener(HideHint);
+    }
+
+    public void Awake()
+    {
+        if (tileMatrix == null || tileMatrix.Length == 0)
+        {
+            tileMatrix = new Tile[width, height];
+        }
+        if (prechargedTiles.Count != 0)
+            LoadPrechargedTiles();
+        matchChecker = new MatchChecker(tileMatrix, width, height);
+        boardCommandManager = GetComponent<BoardCommandManager>();
+        if (!boardCommandManager)
+        {
+            boardCommandManager = gameObject.AddComponent<BoardCommandManager>();
+        }
+        tileManager = new TileManager(tileMatrix, tilePrefab, tiles, swapDuration, transform);
+        boardRefiller = new BoardRefiller(tileMatrix, tilePrefab, tiles, width, height, transform);
+
+        boardCommandManager.CreateNewCommandGroup("InitializeBoard");
+        InitializeBoard();
+
+
+        boardCommandManager.CreateNewCommandGroup("MovementInputStart");
+    }
+
+    public void LoadPrechargedTiles()
+    {
+        for (int row = 0; row < width; row++)
+        {
+            for (int column = 0; column < height; column++)
+            {
+                int index = row * height + column;
+                if (index < prechargedTiles.Count)
+                {
+                    tileMatrix[row, column] = prechargedTiles[index];
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+    }
 
     private void InitializeBoard()
     {
@@ -57,10 +99,14 @@ public class Board : MonoBehaviour
         {
             for (int j = 0; j < height; j++)
             {
-                tileManager.CreateAndSetUpTile(i, j);
+                if (tileMatrix[i, j] == null)
+                {
+                    tileManager.CreateAndSetUpTile(i, j);
+                }
             }
         }
     }
+
 
     public List<Tile> CheckForMatchesAt(int x, int y)
     {
@@ -70,6 +116,7 @@ public class Board : MonoBehaviour
 
     public IEnumerator SwapTiles(Tile tileA, Tile tileB)
     {
+        boardCommandManager.CreateNewCommandGroup("SwapTiles");
         int tileAX = tileA.x;
         int tileAY = tileA.y;
         int tileBX = tileB.x;
@@ -86,7 +133,7 @@ public class Board : MonoBehaviour
             ClearMatches(newMatches);
             yield return new WaitForSeconds(waitForRefillDelay);
             onBoardRefillComplete.Invoke();
-            StartCoroutine(RefillBoard());
+            yield return StartCoroutine(RefillBoard());
         }
         else
         {
@@ -100,8 +147,7 @@ public class Board : MonoBehaviour
             tileB.x = tileAX;
             tileB.y = tileAY;
 
-            // No match: reverse the swap
-            // Swap back the tiles using DOTween
+
             tileA.MoveToPosition(tileAX, tileAY, swapDuration);
             tileB.MoveToPosition(tileBX, tileBY, swapDuration);
 
@@ -124,7 +170,8 @@ public class Board : MonoBehaviour
     {
         foreach (Tile tile in matches)
         {
-            boardCommandManager.AddAndDoCommand(new CommandDestroy(tile,destructionEffect,duration: matchClearTime));
+            boardCommandManager.AddAndDoCommandToTheLastGroup(new CommandDestroy(tile,
+                matchClearTime, delegate { }));
         }
     }
 
@@ -135,7 +182,7 @@ public class Board : MonoBehaviour
         List<Tile> newMatches = matchChecker.FindAllMatches();
         if (newMatches.Count > 0)
         {
-            GameController.Instance.IncreaseCombo();
+            onMatch?.Invoke();
             ClearMatches(newMatches);
             yield return new WaitForSeconds(waitForRefillDelay);
             StartCoroutine(RefillBoard());
@@ -151,16 +198,127 @@ public class Board : MonoBehaviour
     }
 
     public UnityEvent<int, int> onTileMatchFound => matchChecker.OnTileMatchFound;
+
+    public TileManager GetTileManager()
+    {
+        return tileManager;
+    }
+
+    public Tile[,] GetTileMatrix()
+    {
+        return tileMatrix;
+    }
+
+    public void SetTileMatrix(Tile[,] newMatrix)
+    {
+        tileMatrix = newMatrix;
+    }
+
+    Tile FindHintTile()
+    {
+        // Loop through all tiles in the board
+        for (int i = 0; i < width; i++)
+        {
+            for (int j = 0; j < height; j++)
+            {
+                // Get the current tile
+                Tile tile = tileMatrix[i, j];
+                if (tile == null || !tile.IsFullySpawned()) continue;
+
+                // Check if swapping with the right tile creates a match
+                if (i < width - 1 && AreTilesAdjacent(tile, tileMatrix[i + 1, j]))
+                {
+                    // Swap the tiles temporarily
+                    SwapTilesInMatrix(tile, tileMatrix[i + 1, j]);
+                    // Check for matches at the swapped positions
+                    List<Tile> matches = CheckForMatchesAt(i + 1, j);
+                    List<Tile> matchesB = CheckForMatchesAt(i, j);
+                    matches.AddRange(matchesB);
+                    // Swap the tiles back to the original positions
+                    SwapTilesInMatrix(tile, tileMatrix[i + 1, j]);
+                    // If there are matches, return the current tile as a hint
+                    if (matches.Count > 0)
+                    {
+                        return tile;
+                    }
+                }
+
+                // Check if swapping with the upper tile creates a match
+                if (j < height - 1 && AreTilesAdjacent(tile, tileMatrix[i, j + 1]))
+                {
+                    // Swap the tiles temporarily
+                    SwapTilesInMatrix(tile, tileMatrix[i, j + 1]);
+                    // Check for matches at the swapped positions
+                    List<Tile> matches = CheckForMatchesAt(i, j + 1);
+                    List<Tile> matchesB = CheckForMatchesAt(i, j);
+                    matches.AddRange(matchesB);
+                    // Swap the tiles back to the original positions
+                    SwapTilesInMatrix(tile, tileMatrix[i, j + 1]);
+                    // If there are matches, return the current tile as a hint
+                    if (matches.Count > 0)
+                    {
+                        return tile;
+                    }
+                }
+            }
+        }
+        // If no matches are found, return null
+        return null;
+    }
+
+    private void SwapTilesInMatrix(Tile tileA, Tile tileB)
+    {
+        int tileAX = tileA.x;
+        int tileAY = tileA.y;
+        int tileBX = tileB.x;
+        int tileBY = tileB.y;
+
+// Swap tiles' positions in the matrix
+        tileMatrix[tileAX, tileAY] = tileB;
+        tileMatrix[tileBX, tileBY] = tileA;
+
+// Update tile coordinates
+        tileA.x = tileBX;
+        tileA.y = tileBY;
+        tileB.x = tileAX;
+        tileB.y = tileAY;
+    }
+
+    Color originalColor = Color.white;
+
+    private void ShowHint()
+    {
+        // Find a hint tile
+        hintTile = FindHintTile();
+        if (hintTile == null) return;
+        originalColor = hintTile.GetComponentInChildren<SpriteRenderer>().color;
+// Highlight the hint tile by changing its color or adding an effect
+        hintTile.GetComponentInChildren<SpriteRenderer>().color = Color.yellow;
+
+// TODO: Add any other logic for showing the hint, such as playing a sound or showing an animation
+    }
+
+    private void HideHint()
+    {
+        if (hintTile == null) return;
+        hintTile.GetComponentInChildren<SpriteRenderer>().color = originalColor;
+
+
+// TODO: Add any other logic for hiding the hint, such as stopping an effect or animation
+    }
 } 
 File: BoardCommandManager.cs 
 ﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 
-class BoardCommandManager : MonoBehaviour
+public class BoardCommandManager : MonoBehaviour
 {
     private Board board;
-    private List<Command> performedCommands;
+
+    [SerializeReference] private List<GroupCommand> groupCommands;
+
+    [SerializeReference, SubclassSelector] private List<Command> performedCommands;
     public static BoardCommandManager instance;
 
     private void Awake()
@@ -173,14 +331,15 @@ class BoardCommandManager : MonoBehaviour
     {
         board = GetComponent<Board>();
         performedCommands = new List<Command>();
+        groupCommands = new List<GroupCommand>();
     }
 
-    public void AddCommand(Command command)
+    void AddCommand(Command command)
     {
         performedCommands.Add(command);
     }
 
-    public void DoCommand(int commandIndex)
+    void DoCommand(int commandIndex)
     {
         if (commandIndex < 0 || commandIndex >= performedCommands.Count)
         {
@@ -189,7 +348,7 @@ class BoardCommandManager : MonoBehaviour
         performedCommands[commandIndex].DoCommand();
     }
 
-    public void UndoLastCommand()
+    void UndoLastCommand()
     {
         if (performedCommands.Count == 0)
         {
@@ -199,12 +358,39 @@ class BoardCommandManager : MonoBehaviour
         performedCommands.Remove(performedCommands[^1]);
     }
 
+    public void UndoLastGroupCommand()
+    {
+        if (performedCommands.Count == 0 || groupCommands.Count == 0)
+        {
+            return;
+        }
+        var groupCommand = groupCommands[^1];
+        groupCommand.UndoCommandsInGroup();
+        foreach (var command in groupCommand.GetCommandsInGroup())
+        {
+            performedCommands.Remove(command);
+        }
+        groupCommands.Remove(groupCommand);
+    }
+
     public void AddAndDoCommand(Command command)
     {
         performedCommands.Add(command);
         command.DoCommand();
     }
-} 
+
+    public void AddAndDoCommandToTheLastGroup(Command command)
+    {
+        groupCommands[^1].AddCommandToGroup(command);
+        performedCommands.Add(command);
+        command.DoCommand();
+    }
+
+    public void CreateNewCommandGroup(string name)
+    {
+        groupCommands.Add(new GroupCommand(name));
+    }
+}      
 File: BoardRefiller.cs 
 ﻿using System.Collections;
 using DG.Tweening;
@@ -258,15 +444,17 @@ public class BoardRefiller
             {
                 if (_tileMatrix[i, j] == null)
                 {
-                    SpawnNewTileAt(i, j);
+                    int randomTile = GetRandomTileIndex(i, j);
+                    BoardCommandManager.instance.AddAndDoCommand(new CommandCreateTile(this,    GameObject.FindObjectOfType<Board>().GetTileManager(), i, j, randomTile)); 
                 }
             }
         }
     }
 
-    private Tile SpawnNewTileAt(int x, int y)
+    internal Tile SpawnNewRandomTileAt(int x, int y)
     {
-        GameObject newTile = Object.Instantiate(_tilePrefab, new Vector2(x, y), Quaternion.identity);
+        GameObject newTile = Object.Instantiate(_tilePrefab,  _parentTransform);
+        newTile.transform.localPosition = new Vector2(x, y);
         newTile.transform.SetParent(_parentTransform);
         int randomTile = GetRandomTileIndex(x, y);
         SetTileSprite(newTile, randomTile);
@@ -289,7 +477,9 @@ public class BoardRefiller
 
         do
         {
-            randomTile = Random.Range(0, _tiles.Length);
+            CommandSaveLoadRandomState commandSaveLoadRandomState =  new CommandSaveLoadRandomState(0, _tiles.Length);
+            BoardCommandManager.instance.AddAndDoCommandToTheLastGroup(commandSaveLoadRandomState);
+            randomTile =commandSaveLoadRandomState.result;
         } while (CreatesInitialMatch(x, y, randomTile));
 
         return randomTile;
@@ -342,7 +532,7 @@ public class BoardRefiller
                     }
                     else
                     {
-                        SpawnNewTileAt(x, _height - 1);
+                        SpawnNewRandomTileAt(x, _height - 1);
                         _tileMatrix[x, _height - 1].transform.position = new Vector3(x, _height, 0);
                         _tileMatrix[x, _height - 1].MoveToPosition(x, y, 0.5f);
                         _tileMatrix[x, _height - 1].y = y;
@@ -354,85 +544,86 @@ public class BoardRefiller
     }
 } 
 File: Command.cs 
-﻿public abstract  class Command
+﻿using System;
+using UnityEngine.Events;
+
+[Serializable]
+public abstract  class Command
 {
-  public abstract void DoCommand(bool force=false);
+  public UnityEvent onDoCommand = new UnityEvent();
+
+  public Command(UnityAction onDoCommand = null)
+  {
+    this.onDoCommand.AddListener(onDoCommand);
+  }
+  public virtual void DoCommand(bool force = false)
+  {
+    onDoCommand?.Invoke();
+  }
   public abstract void UndoCommand(bool force=false);
 
 } 
 File: CommandAddScore.cs 
-﻿public class CommandAddScore : Command
+﻿using System;
+
+[Serializable]
+public class CommandAddScore : Command
 {
-    // Un campo para guardar la referencia al modelo del juego
     private GameModel gameModel;
-    // Un campo para guardar el valor a sumar o restar a la puntuación
     private int scoreValue;
 
-    // El constructor recibe el modelo del juego y el valor a sumar o restar
     public CommandAddScore(GameModel gameModel, int scoreValue)
     {
-        // Guarda los valores recibidos en los campos correspondientes
         this.gameModel = gameModel;
         this.scoreValue = scoreValue;
     }
 
     public override void DoCommand(bool force = false)
     {
-        // Llama al método AddScore del modelo del juego pasándole el valor a sumar
         gameModel.AddScore(scoreValue);
     }
 
     public override void UndoCommand(bool force = false)
     {
-        // Llama al método AddScore del modelo del juego pasándole el valor a restar (el opuesto al valor a sumar)
         gameModel.AddScore(-scoreValue);
     }
 } 
 File: CommandBoardRefill.cs 
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
+[Serializable]
 public class CommandBoardRefill : Command
 {
-    // A field to store the reference to the board refiller
     private BoardRefiller boardRefiller;
-    private int refillType; // A field to store the list of tiles that were spawned or moved during the refill
-    private List<Tile> affectedTiles; // A field to store the list of original positions of the affected tiles
+    private int refillType;
+    private List<Tile> affectedTiles;
     private List<Vector2Int> originalPositions;
 
-// The constructor receives the board refiller and the refill type
     public CommandBoardRefill(BoardRefiller boardRefiller, int refillType)
     {
-        // Save the values received in the corresponding fields
         this.boardRefiller = boardRefiller;
         this.refillType = refillType;
-        // Initialize the lists of affected tiles and original positions
         affectedTiles = new List<Tile>();
         originalPositions = new List<Vector2Int>();
-        // Subscribe to the onTileFullSpawn event of the board refiller
         BoardRefiller.onTileFullSpawn.AddListener(OnTileFullSpawn);
     }
 
     public override void DoCommand(bool force = false)
     {
-        // Call the RefillBoard method of the board refiller passing the refill type
         boardRefiller.RefillBoard(refillType);
     }
 
     public override void UndoCommand(bool force = false)
     {
-        // Loop through the affected tiles and their original positions
         for (int i = 0; i < affectedTiles.Count; i++)
         {
-            // Get the current tile and its original position
             Tile tile = affectedTiles[i];
             Vector2Int originalPosition = originalPositions[i];
-            // Get the current position of the tile
             int currentX = tile.x;
             int currentY = tile.y;
-            // Move the tile back to its original position using its MoveToPosition method
             tile.MoveToPosition(originalPosition.x, originalPosition.y, 0.5f);
-            // Update the tile coordinates and its position in the board matrix
             Board board = GameObject.FindObjectOfType<Board>();
             board.tileMatrix[currentX, currentY] = null;
             board.tileMatrix[originalPosition.x, originalPosition.y] = tile;
@@ -443,41 +634,202 @@ public class CommandBoardRefill : Command
 
     private void OnTileFullSpawn(Tile spawnedTile)
     {
-        // Add the spawned tile to the list of affected tiles
         affectedTiles.Add(spawnedTile);
-        // Add a dummy position (-1, -1) to the list of original positions for spawned tiles
         originalPositions.Add(new Vector2Int(-1, -1));
     }
 } 
-File: CommandDestroy.cs 
-﻿using DG.Tweening;
+File: CommandCreateTile.cs 
+﻿using System;
+using DG.Tweening;
 using UnityEngine;
 
-public class CommandDestroy : Command
+[Serializable]
+public class CommandCreateTile : Command
 {
-    // Un campo para guardar la referencia a la casilla a destruir
-    private Tile tileToDestroy;
-    // Un campo para guardar el tipo de la casilla antes de destruirla
-    private int tileTypeBeforeDestroy;
-    // Un campo para guardar el efecto de destrucción que se usa
-    private TileDestructionEffect destructionEffect;
-    // Un campo para guardar la duración del efecto de destrucción
-    private float destructionEffectDuration;
-    public CommandDestroy(Tile tileToDestroy, TileDestructionEffect destructionEffect, float duration)
+    private BoardRefiller boardRefiller;
+    private TileManager tileManager;
+    private int xPos, yPos;
+    private int tileType;
+    private Tile createdTile;
+
+    public CommandCreateTile(BoardRefiller boardRefiller,TileManager tileManager, int xPos, int yPos, int tileType)
     {
-        // Guarda los valores recibidos en los campos correspondientes
-        this.tileToDestroy = tileToDestroy;
-        this.destructionEffect = destructionEffect;
-        this.destructionEffectDuration = duration;
-        // Guarda el tipo de la casilla antes de destruirla
-        this.tileTypeBeforeDestroy = tileToDestroy.tileType;
+        this.tileManager = tileManager;
+        this.boardRefiller = boardRefiller;
+        this.xPos = xPos;
+        this.yPos = yPos;
+        this.tileType = tileType;
     }
 
     public override void DoCommand(bool force = false)
     {
-        // Llama al método Play del efecto de destrucción pasándole la posición de la casilla
-        destructionEffect.Play(tileToDestroy.transform.position);
-        // Escala la casilla a cero usando DOTween y al completarse la destruye y la pone en null en la matriz del tablero
+        createdTile = boardRefiller.SpawnNewRandomTileAt(xPos, yPos);
+        createdTile.tileType = tileType;
+        tileManager.SetTileSprite(createdTile.gameObject, tileType);
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        TileDestructionEffect destructionEffect = GameObject.FindObjectOfType<TileDestructionEffect>();
+        destructionEffect.Play(createdTile.transform.position);
+        createdTile.transform.DOScale(Vector3.zero, .5f)
+            .OnComplete(() =>
+            {
+                GameObject.Destroy(createdTile.gameObject);
+                Board board = GameObject.FindObjectOfType<Board>();
+                board.tileMatrix[createdTile.x, createdTile.y] = null;
+            });
+    }
+} 
+File: CommandDestroy.cs 
+﻿using System;
+using DG.Tweening;
+using UnityEngine;
+using UnityEngine.Events;
+
+[Serializable]
+
+public class CommandDestroy : Command
+{
+    private Tile tileToDestroy;
+    private int tileTypeBeforeDestroy;
+    private float destructionEffectDuration;
+    private Vector2Int positionBeforeDestroy;
+    public CommandDestroy(Tile tileToDestroy,float duration, UnityAction onDestroyStart=null)
+    {
+        this.tileToDestroy = tileToDestroy;
+         this.destructionEffectDuration = duration;
+        this.tileTypeBeforeDestroy = tileToDestroy.tileType;
+        onDoCommand.AddListener(onDestroyStart);
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        tileToDestroy.transform.DOScale(Vector3.zero, destructionEffectDuration)
+            .OnComplete(() =>
+            {
+                positionBeforeDestroy= new Vector2Int(tileToDestroy.x,tileToDestroy.y);
+                Board board = GameObject.FindObjectOfType<Board>();
+                board.tileMatrix[tileToDestroy.x, tileToDestroy.y] = null;
+                GameObject.Destroy(tileToDestroy.gameObject);
+
+            });
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        Board board = GameObject.FindObjectOfType<Board>();
+        TileManager tileManager = new TileManager(board.tileMatrix, board.tilePrefab, board.tiles, board.swapDuration,
+            board.transform);
+        tileManager.CreateAndSetUpTile(positionBeforeDestroy.x, positionBeforeDestroy.y);
+        Tile newTile = board.tileMatrix[positionBeforeDestroy.x, positionBeforeDestroy.y];
+        newTile.tileType = tileTypeBeforeDestroy;
+        tileManager.SetTileSprite(newTile.gameObject, tileTypeBeforeDestroy);
+        newTile.transform.localScale = Vector3.zero;
+        newTile.transform.DOScale(Vector3.one, destructionEffectDuration)
+            .OnComplete(() => { newTile.SetIsFullySpawned(true); });
+    }
+} 
+File: CommandMove.cs 
+﻿using System;
+using UnityEngine;
+[Serializable]
+
+public class CommandMove : Command
+{
+    private Tile tileToMove;
+    private int originalX, originalY;
+    private int newX, newY;
+    private float moveDuration;
+
+    public CommandMove(Tile tileToMove, int newX, int newY, float duration)
+    {
+        this.tileToMove = tileToMove;
+        this.newX = newX;
+        this.newY = newY;
+        this.moveDuration = duration;
+        this.originalX = tileToMove.x;
+        this.originalY = tileToMove.y;
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        tileToMove.MoveToPosition(newX, newY, moveDuration);
+        Board board = GameObject.FindObjectOfType<Board>();
+        board.tileMatrix[originalX, originalY] = null;
+        board.tileMatrix[newX, newY] = tileToMove;
+        tileToMove.x = newX;
+        tileToMove.y = newY;
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        tileToMove.MoveToPosition(originalX, originalY, moveDuration);
+        Board board = GameObject.FindObjectOfType<Board>();
+        board.tileMatrix[newX, newY] = null;
+        board.tileMatrix[originalX, originalY] = tileToMove;
+        tileToMove.x = originalX;
+        tileToMove.y = originalY;
+    }
+} 
+File: CommandSaveLoadRandomState.cs 
+﻿using System;
+using Random = UnityEngine.Random;
+
+[Serializable]
+
+public class CommandSaveLoadRandomState : Command
+{
+    private Random.State previousState;
+    private Random.State currentState;
+
+    public int minInclusive, maxExclusive;
+
+    public int result;
+
+    public CommandSaveLoadRandomState(int min, int max)
+    {
+        previousState = Random.state;
+        minInclusive = min;
+        maxExclusive = max;
+        currentState = previousState;
+    }
+
+    public override void DoCommand(bool force = false)
+    {
+        result = Random.Range(minInclusive, maxExclusive);
+        currentState = Random.state;
+    }
+
+    public override void UndoCommand(bool force = false)
+    {
+        Random.state = previousState;
+        currentState = previousState;
+        result = 0;
+    }
+} 
+File: CommandSpawnTile.cs 
+﻿using System;
+using DG.Tweening;
+using UnityEngine;
+[Serializable]
+
+public class CommandSpawnTile :Command
+{
+     private Tile tileToDestroy;
+     private int tileTypeBeforeDestroy;
+      private float destructionEffectDuration;
+ int xPos, yPos;
+    public CommandSpawnTile(Tile tileToSpawn,int xPos,int yPos,  float duration, BoardRefiller boardRefiller)
+    {
+        boardRefiller.SpawnNewRandomTileAt(xPos, yPos);
+         this.tileToDestroy = tileToDestroy;
+         this.destructionEffectDuration = duration;
+         this.tileTypeBeforeDestroy = tileToDestroy.tileType;
+    }
+
+    public override void DoCommand(bool force = false)
+    {
         tileToDestroy.transform.DOScale(Vector3.zero, destructionEffectDuration)
             .OnComplete(() =>
             {
@@ -489,73 +841,16 @@ public class CommandDestroy : Command
 
     public override void UndoCommand(bool force = false)
     {
-        // Crea una nueva casilla en la posición de la casilla destruida usando el método CreateAndSetUpTile del TileManager
-        Board board = GameObject.FindObjectOfType<Board>();
-        TileManager tileManager = new TileManager(board.tileMatrix, board.tilePrefab, board.tiles, board.swapDuration, board.transform);
+         Board board = GameObject.FindObjectOfType<Board>();
+        TileManager tileManager = new TileManager(board.tileMatrix, board.tilePrefab, board.tiles, board.swapDuration,
+            board.transform);
         tileManager.CreateAndSetUpTile(tileToDestroy.x, tileToDestroy.y);
-        // Asigna el tipo guardado a la nueva casilla y actualiza su sprite
-        Tile newTile = board.tileMatrix[tileToDestroy.x, tileToDestroy.y];
+         Tile newTile = board.tileMatrix[tileToDestroy.x, tileToDestroy.y];
         newTile.tileType = tileTypeBeforeDestroy;
         tileManager.SetTileSprite(newTile.gameObject, tileTypeBeforeDestroy);
-        // Escala la nueva casilla desde cero usando DOTween y al completarse le asigna el valor de isFullySpawned a true
-        newTile.transform.localScale = Vector3.zero;
+         newTile.transform.localScale = Vector3.zero;
         newTile.transform.DOScale(Vector3.one, destructionEffectDuration)
-            .OnComplete(() =>
-            {
-                newTile.SetIsFullySpawned(true);
-            });
-    }
-
-} 
-File: CommandMove.cs 
-﻿using UnityEngine;
-
-public class CommandMove : Command
-{
-    // Un campo para guardar la referencia a la casilla a mover
-    private Tile tileToMove;
-    // Un campo para guardar las coordenadas originales de la casilla antes de moverla
-    private int originalX, originalY;
-    // Un campo para guardar las coordenadas nuevas de la casilla después de moverla
-    private int newX, newY;
-    // Un campo para guardar la duración del movimiento
-    private float moveDuration;
-
-    // El constructor recibe la casilla a mover, las coordenadas nuevas y la duración
-    public CommandMove(Tile tileToMove, int newX, int newY, float duration)
-    {
-        // Guarda los valores recibidos en los campos correspondientes
-        this.tileToMove = tileToMove;
-        this.newX = newX;
-        this.newY = newY;
-        this.moveDuration = duration;
-        // Guarda las coordenadas originales de la casilla antes de moverla
-        this.originalX = tileToMove.x;
-        this.originalY = tileToMove.y;
-    }
-
-    public override void DoCommand(bool force = false)
-    {
-        // Llama al método MoveToPosition de la casilla pasándole las coordenadas nuevas y la duración
-        tileToMove.MoveToPosition(newX, newY, moveDuration);
-        // Actualiza las coordenadas de la casilla y su posición en la matriz del tablero
-        Board board = GameObject.FindObjectOfType<Board>();
-        board.tileMatrix[originalX, originalY] = null;
-        board.tileMatrix[newX, newY] = tileToMove;
-        tileToMove.x = newX;
-        tileToMove.y = newY;
-    }
-
-    public override void UndoCommand(bool force = false)
-    {
-        // Llama al método MoveToPosition de la casilla pasándole las coordenadas originales y la duración
-        tileToMove.MoveToPosition(originalX, originalY, moveDuration);
-        // Actualiza las coordenadas de la casilla y su posición en la matriz del tablero
-        Board board = GameObject.FindObjectOfType<Board>();
-        board.tileMatrix[newX, newY] = null;
-        board.tileMatrix[originalX, originalY] = tileToMove;
-        tileToMove.x = originalX;
-        tileToMove.y = originalY;
+            .OnComplete(() => { newTile.SetIsFullySpawned(true); });
     }
 } 
 File: GameController.cs 
@@ -568,6 +863,7 @@ public class GameController : MonoBehaviour
     public GameView view;
 
     private int currentLevel = 0;
+    private int currentRandomSeed;
     [Header("Timers")] [SerializeField] private float checkConditionInterval = 1f;
     private float elapsedTime = 0;
 
@@ -588,10 +884,12 @@ public class GameController : MonoBehaviour
     {
         InitializeLevel(currentLevel);
         view.inputHandler.onTilesSwapped.AddListener(OnTilesSwapped);
+        view.board.onMatch.AddListener(OnMatch);
         view.board.onMatchStart.AddListener(OnMatchStart);
         view.board.onBoardRefillComplete.AddListener(OnBoardRefillComplete);
         model.OnScoreChanged.AddListener((s) => CheckGameState());
         view.OnTileMatchFound.AddListener(OnTileMatchFound);
+        currentRandomSeed = UnityEngine.Random.seed;
 
         elapsedTime = 0f;
     }
@@ -604,7 +902,7 @@ public class GameController : MonoBehaviour
         model.totalTime = objective.maxTime;
         model.remainingTime = model.totalTime;
         model.score = 0;
-        model.comboMultiplier = 1;
+        model.SetComboMultiplier(1);
     }
 
     void Update()
@@ -632,10 +930,12 @@ public class GameController : MonoBehaviour
     {
         model.SetComboMultiplier(model.GetComboMultiplier() + 1);
     }
+
     public void ResetCombo()
     {
         model.SetComboMultiplier(1);
     }
+
     public void OnTilesSwapped(Tile tileA, Tile tileB)
     {
         StartCoroutine(view.board.SwapTiles(tileA, tileB));
@@ -712,6 +1012,12 @@ public class GameController : MonoBehaviour
         // Handle the matched tiles in this method.
         // Example: Add score based on the number of matched tiles and tile type
     }
+    
+
+    private void OnMatch()
+    {
+        IncreaseCombo();
+    }
 } 
 File: GameModel.cs 
 ﻿using UnityEngine;
@@ -722,7 +1028,7 @@ public class GameModel : MonoBehaviour
 {
     public int score;
     public int moves;
-    public int comboMultiplier;
+   [SerializeField] private int comboMultiplier;
     public int currentLevel;
     
     public LevelObjective[] levels;
@@ -730,7 +1036,7 @@ public class GameModel : MonoBehaviour
     public float remainingTime;
     public UnityEvent<int> OnScoreChanged;
     public UnityEvent<int,int> OnTileMatchFound;
-
+    
     public int CurrentLevel => currentLevel;
 
     public void ResetComboMultiplier()
@@ -802,6 +1108,46 @@ public class GameView : MonoBehaviour
         get { return board.onTileMatchFound; }
     }
 } 
+File: GroupCommand.cs 
+﻿using System;
+using System.Collections.Generic;
+using UnityEngine;
+
+[Serializable]
+public class GroupCommand
+{
+    [SerializeField] private string commandGroupName;
+    [SerializeReference, SubclassSelector] private List<Command> commandsInGroup;
+    public GroupCommand(string name)
+    {
+        commandGroupName = name;
+        commandsInGroup = new List<Command>();
+    }
+
+    public List<Command> GetCommandsInGroup()
+    {
+        return commandsInGroup;
+    }
+
+    public void AddCommandToGroup(Command command)
+    {
+        commandsInGroup.Add(command);
+    }
+
+    public void RemoveCommandFromGroup(Command command)
+    {
+        commandsInGroup.Remove(command);
+    }
+
+    public void UndoCommandsInGroup(bool fast=false)
+    {
+        for (var index = commandsInGroup.Count - 1; index >= 0; index--)
+        {
+            var command = commandsInGroup[index];
+            command.UndoCommand(fast);
+        } 
+    }
+} 
 File: InputHandler.cs 
 ﻿using System;
 using UnityEngine;
@@ -811,19 +1157,20 @@ using UnityEngine.Serialization;
 
 public class InputHandler : MonoBehaviour
 {
-   
-    [FormerlySerializedAs("OnTilesSwapped")] public  UnityEvent<Tile, Tile> onTilesSwapped;
+    public UnityEvent<Tile, Tile> onTilesSwapped;
     private Board board;
     private Tile selectedTile;
     private Camera mainCamera;
-    private float maxTimeWithoutInput = 10f;
+    [SerializeField]private float maxTimeWithoutInput = 3f;
     private float currentTimeWithoutInput;
     public UnityEvent onNoInputForLongTime;
+    public UnityEvent onInputAfterNoInputForLongTime;
+
     void Awake()
     {
         if (onTilesSwapped == null)
         {
-            onTilesSwapped = new  UnityEvent<Tile, Tile>();
+            onTilesSwapped = new UnityEvent<Tile, Tile>();
         }
     }
 
@@ -847,8 +1194,8 @@ public class InputHandler : MonoBehaviour
             Vector2 mousePosition = mainCamera.ScreenToWorldPoint(Mouse.current.position.ReadValue());
             HandleInput(mousePosition);
         }
-        currentTimeWithoutInput = Mathf.Min(currentTimeWithoutInput + Time.deltaTime,currentTimeWithoutInput);
-        if (currentTimeWithoutInput==maxTimeWithoutInput)
+        currentTimeWithoutInput = Mathf.Min(currentTimeWithoutInput + Time.deltaTime, maxTimeWithoutInput);
+        if (currentTimeWithoutInput == maxTimeWithoutInput)
         {
             onNoInputForLongTime?.Invoke();
             currentTimeWithoutInput = 0;
@@ -857,6 +1204,10 @@ public class InputHandler : MonoBehaviour
 
     private void HandleInput(Vector2 position)
     {
+        if (currentTimeWithoutInput!=0)
+        {
+            onInputAfterNoInputForLongTime?.Invoke();
+        }
         RaycastHit2D hit = Physics2D.Raycast(position, Vector2.zero);
         if (hit.collider != null)
         {
@@ -950,7 +1301,7 @@ public class MatchChecker
         Tile tile = _tileMatrix[x, y];
         if (tile  == null || !tile.IsFullySpawned())
         {
-            Debug.LogError("Not tile at pos x: " + x + " y: " + y);
+            Debug.LogWarning("Not tile at pos x: " + x + " y: " + y);
             return new List<Tile>();
         }
 
@@ -1117,17 +1468,22 @@ public class ScoreVictoryCondition : VictoryCondition
     }
 } 
 File: Tile.cs 
-﻿using DG.Tweening;
+﻿using System;
+using DG.Tweening;
 using UnityEngine;
+using UnityEngine.Events;
+using UnityEngine.Serialization;
 
+[Serializable]
 public class Tile : MonoBehaviour
 {
     public int x;
     public int y;
     public int tileType;
-    private bool isFullySpawned;
+    [HideInInspector] [SerializeField] private bool isFullySpawned;
     [SerializeField] int numberOfSameTilesToMatch;
-
+    [FormerlySerializedAs("onDestroy")] public UnityEvent onDestroyStart;
+    public UnityEvent onDestroyFinish;
     public void Init(int xPos, int yPos, int type)
     {
         x = xPos;
@@ -1141,11 +1497,16 @@ public class Tile : MonoBehaviour
         y = newY;
         isFullySpawned = false;
 
-        transform.DOMove(new Vector2(x, y), duration)
+        transform.DOLocalMove(new Vector2(x, y), duration)
             .OnComplete(() => { isFullySpawned = true; });
     }
 
-
+    public void DestroyTile()
+    {
+        onDestroyStart?.Invoke();
+        onDestroyFinish?.Invoke();
+    }
+    
     public bool IsFullySpawned()
     {
         return isFullySpawned;
@@ -1210,30 +1571,31 @@ public class TileManager
     private GameObject[] _tiles;
     private float _swapDuration;
 
- 
+
     private Transform _parentTransform;
-private BoardCommandManager _boardCommandManager;
-    public TileManager(Tile[,] tileMatrix, GameObject tilePrefab, GameObject[] tiles, float swapDuration, Transform parentTransform)
+    private BoardCommandManager _boardCommandManager;
+
+    public TileManager(Tile[,] tileMatrix, GameObject tilePrefab, GameObject[] tiles, float swapDuration,
+        Transform parentTransform)
     {
         _tileMatrix = tileMatrix;
         _tilePrefab = tilePrefab;
         _tiles = tiles;
         _swapDuration = swapDuration;
         _parentTransform = parentTransform;
-        _boardCommandManager = BoardCommandManager.instance;
+        _boardCommandManager =  parentTransform.GetComponent<BoardCommandManager>();
     }
 
     public void CreateAndSetUpTile(int x, int y)
     {
-        GameObject newTile = Object.Instantiate(_tilePrefab, new Vector2(x, y), Quaternion.identity);
-        newTile.transform.SetParent(_parentTransform);
-
+        GameObject newTile = Object.Instantiate(_tilePrefab, _parentTransform);
+        newTile.transform.localPosition = new Vector2(x, y);
         int randomTile = GetRandomTileIndex(x, y);
         SetTileSprite(newTile, randomTile);
 
         _tileMatrix[x, y] = newTile.GetComponent<Tile>();
         _tileMatrix[x, y].Init(x, y, randomTile);
-        _tileMatrix[x, y].SetIsFullySpawned(true);  // Set IsFullySpawned to true for initial tiles
+        _tileMatrix[x, y].SetIsFullySpawned(true); // Set IsFullySpawned to true for initial tiles
     }
 
     public IEnumerator SwapTiles(Tile tileA, Tile tileB)
@@ -1242,8 +1604,8 @@ private BoardCommandManager _boardCommandManager;
         int tileAY = tileA.y;
         int tileBX = tileB.x;
         int tileBY = tileB.y;
-        _boardCommandManager.AddAndDoCommand(new CommandMove( tileA,tileBX, tileBY, _swapDuration));
-        _boardCommandManager.AddAndDoCommand(new CommandMove( tileB,tileAX, tileAY, _swapDuration));
+        _boardCommandManager.AddAndDoCommandToTheLastGroup(new CommandMove(tileA, tileBX, tileBY, _swapDuration));
+        _boardCommandManager.AddAndDoCommandToTheLastGroup(new CommandMove(tileB, tileAX, tileAY, _swapDuration));
         _tileMatrix[tileAX, tileAY] = tileB;
         _tileMatrix[tileBX, tileBY] = tileA;
         tileA.x = tileBX;
@@ -1257,11 +1619,13 @@ private BoardCommandManager _boardCommandManager;
     private int GetRandomTileIndex(int x, int y)
     {
         int randomTile;
-
         do
         {
-            randomTile = Random.Range(0, _tiles.Length);
-        } while(CreatesInitialMatch(x, y, randomTile));
+            CommandSaveLoadRandomState commandSaveLoadRandomState =
+                new CommandSaveLoadRandomState(0, _tiles.Length);
+            _boardCommandManager.AddAndDoCommand(commandSaveLoadRandomState);
+            randomTile = commandSaveLoadRandomState.result;
+        } while (CreatesInitialMatch(x, y, randomTile));
 
         return randomTile;
     }
@@ -1284,7 +1648,9 @@ private BoardCommandManager _boardCommandManager;
     internal void SetTileSprite(GameObject tileObject, int tileIndex)
     {
         SpriteRenderer renderer = tileObject.GetComponentInChildren<SpriteRenderer>();
-        renderer.sprite = _tiles[tileIndex].GetComponentInChildren<SpriteRenderer>().sprite;
+        var prefabTile = _tiles[tileIndex].GetComponentInChildren<SpriteRenderer>();
+        renderer.sprite = prefabTile.sprite;
+        renderer.color = prefabTile.color;
     }
 } 
 File: UIManager.cs 

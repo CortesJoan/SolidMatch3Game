@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using DG.Tweening;
@@ -12,13 +13,12 @@ public class Board : MonoBehaviour
     public int height;
     public GameObject tilePrefab;
     public GameObject[] tiles;
-    public GameObject destructionEffectPrefab;
-    public UnityEvent onMatchStart;
-    public UnityEvent onBoardRefillComplete;
+    public UnityEvent onMatchStart = new UnityEvent();
+    public UnityEvent onMatch = new UnityEvent();
+    public UnityEvent onBoardRefillComplete = new UnityEvent(); 
     public int refillType;
 
-    internal Tile[,] tileMatrix;
-    private TileDestructionEffect destructionEffect;
+    [SerializeField] internal Tile[,] tileMatrix;
 
     private MatchChecker matchChecker;
     private TileManager tileManager;
@@ -29,26 +29,67 @@ public class Board : MonoBehaviour
     internal float swapDuration = 0.5f;
     [SerializeField] private float waitForRefillDelay = 0.5f;
     [SerializeField] private float matchClearTime = 0.5f;
- 
-    void Awake()
+
+    [Header("Debug")] [SerializeField] internal List<Tile> prechargedTiles = new List<Tile>();
+
+    [Header("Hint")] private Tile hintTile;
+
+    [SerializeField] InputHandler inputHandler;
+
+    private void OnEnable()
     {
-        tileMatrix = new Tile[width, height];
-
-        // Pass proper arguments to MatchChecker constructor
-        matchChecker = new MatchChecker(tileMatrix, width, height);
-
-        // Pass proper arguments to TileManager constructor
-        tileManager = new TileManager(tileMatrix, tilePrefab, tiles, swapDuration, transform);
-
-        // Pass proper arguments to BoardRefiller constructor
-        boardRefiller = new BoardRefiller(tileMatrix, tilePrefab, tiles, width, height, transform);
-
-        InitializeBoard();
-        boardCommandManager = GetComponent<BoardCommandManager>();
-        GameObject effect = Instantiate(destructionEffectPrefab);
-        destructionEffect = effect.GetComponent<TileDestructionEffect>();
+        inputHandler.onNoInputForLongTime.AddListener(ShowHint);
+        inputHandler.onInputAfterNoInputForLongTime.AddListener(HideHint);
     }
 
+    private void OnDisable()
+    {
+        inputHandler.onNoInputForLongTime.RemoveListener(ShowHint);
+        inputHandler.onInputAfterNoInputForLongTime.RemoveListener(HideHint);
+    }
+
+    public void Awake()
+    {
+        if (tileMatrix == null || tileMatrix.Length == 0)
+        {
+            tileMatrix = new Tile[width, height];
+        }
+        if (prechargedTiles.Count != 0)
+            LoadPrechargedTiles();
+        matchChecker = new MatchChecker(tileMatrix, width, height);
+        boardCommandManager = GetComponent<BoardCommandManager>();
+        if (!boardCommandManager)
+        {
+            boardCommandManager = gameObject.AddComponent<BoardCommandManager>();
+        }
+        tileManager = new TileManager(tileMatrix, tilePrefab, tiles, swapDuration, transform);
+        boardRefiller = new BoardRefiller(tileMatrix, tilePrefab, tiles, width, height, transform);
+
+        boardCommandManager.CreateNewCommandGroup("InitializeBoard");
+        InitializeBoard();
+
+
+        boardCommandManager.CreateNewCommandGroup("MovementInputStart");
+    }
+
+    public void LoadPrechargedTiles()
+    {
+        for (int row = 0; row < width; row++)
+        {
+            for (int column = 0; column < height; column++)
+            {
+                int index = row * height + column;
+                if (index < prechargedTiles.Count)
+                {
+                    tileMatrix[row, column] = prechargedTiles[index];
+                }
+                else
+                {
+                    break;
+                }
+            }
+        }
+    }
 
     private void InitializeBoard()
     {
@@ -56,10 +97,14 @@ public class Board : MonoBehaviour
         {
             for (int j = 0; j < height; j++)
             {
-                tileManager.CreateAndSetUpTile(i, j);
+                if (tileMatrix[i, j] == null)
+                {
+                    tileManager.CreateAndSetUpTile(i, j);
+                }
             }
         }
     }
+
 
     public List<Tile> CheckForMatchesAt(int x, int y)
     {
@@ -69,6 +114,7 @@ public class Board : MonoBehaviour
 
     public IEnumerator SwapTiles(Tile tileA, Tile tileB)
     {
+        boardCommandManager.CreateNewCommandGroup("SwapTiles");
         int tileAX = tileA.x;
         int tileAY = tileA.y;
         int tileBX = tileB.x;
@@ -85,7 +131,7 @@ public class Board : MonoBehaviour
             ClearMatches(newMatches);
             yield return new WaitForSeconds(waitForRefillDelay);
             onBoardRefillComplete.Invoke();
-            StartCoroutine(RefillBoard());
+            yield return StartCoroutine(RefillBoard());
         }
         else
         {
@@ -99,8 +145,7 @@ public class Board : MonoBehaviour
             tileB.x = tileAX;
             tileB.y = tileAY;
 
-            // No match: reverse the swap
-            // Swap back the tiles using DOTween
+
             tileA.MoveToPosition(tileAX, tileAY, swapDuration);
             tileB.MoveToPosition(tileBX, tileBY, swapDuration);
 
@@ -116,6 +161,7 @@ public class Board : MonoBehaviour
             tileA.y = tileAY;
             tileB.x = tileBX;
             tileB.y = tileBY;
+            inputHandler.UnBlockInput();
         }
     }
 
@@ -123,7 +169,8 @@ public class Board : MonoBehaviour
     {
         foreach (Tile tile in matches)
         {
-            boardCommandManager.AddAndDoCommand(new CommandDestroy(tile,destructionEffect,duration: matchClearTime));
+            boardCommandManager.AddAndDoCommandToTheLastGroup(new CommandDestroy(tile,
+                matchClearTime, delegate { }));
         }
     }
 
@@ -134,10 +181,14 @@ public class Board : MonoBehaviour
         List<Tile> newMatches = matchChecker.FindAllMatches();
         if (newMatches.Count > 0)
         {
-            GameController.Instance.IncreaseCombo();
+            onMatch?.Invoke();
             ClearMatches(newMatches);
             yield return new WaitForSeconds(waitForRefillDelay);
             StartCoroutine(RefillBoard());
+        }
+        else
+        {
+            inputHandler.UnBlockInput();
         }
     }
 
@@ -150,4 +201,154 @@ public class Board : MonoBehaviour
     }
 
     public UnityEvent<int, int> onTileMatchFound => matchChecker.OnTileMatchFound;
+
+    public TileManager GetTileManager()
+    {
+        return tileManager;
+    }
+
+    public Tile[,] GetTileMatrix()
+    {
+        return tileMatrix;
+    }
+
+    public void SetTileMatrix(Tile[,] newMatrix)
+    {
+        tileMatrix = newMatrix;
+    }
+
+    Tile FindHintTile()
+    {
+        // Loop through all tiles in the board
+        for (int i = 0; i < width; i++)
+        {
+            for (int j = 0; j < height; j++)
+            {
+                Tile currentTile = tileMatrix[i, j];
+                if (currentTile == null || !currentTile.IsFullySpawned()) continue;
+
+//Horizontal check
+                if (i < width - 1 && AreTilesAdjacent(currentTile, tileMatrix[i + 1, j]))
+                {
+                    SwapTilesInMatrix(currentTile, tileMatrix[i + 1, j]);
+                    List<Tile> matches = CheckForMatchesAt(i + 1, j);
+                    List<Tile> matchesB = CheckForMatchesAt(i, j);
+                    matches.AddRange(matchesB);
+                    SwapTilesInMatrix(currentTile, tileMatrix[i + 1, j]);
+                    if (matches.Count > 0)
+                    {
+                        return currentTile;
+                    }
+                }
+//Vertical check
+
+                if (j < height - 1 && AreTilesAdjacent(currentTile, tileMatrix[i, j + 1]))
+                {
+                    // Swap the tiles temporarily
+                    SwapTilesInMatrix(currentTile, tileMatrix[i, j + 1]);
+                    // Check for matches at the swapped positions
+                    List<Tile> matches = CheckForMatchesAt(i, j + 1);
+                    List<Tile> matchesB = CheckForMatchesAt(i, j);
+                    matches.AddRange(matchesB);
+                    // Swap the tiles back to the original positions
+                    SwapTilesInMatrix(currentTile, tileMatrix[i, j + 1]);
+                    // If there are matches, return the current tile as a hint
+                    if (matches.Count > 0)
+                    {
+                        return currentTile;
+                    }
+                }
+            }
+        }
+        // If no matches are found, return null
+        return null;
+    }
+
+    private void SwapTilesInMatrix(Tile tileA, Tile tileB)
+    {
+        int tileAX = tileA.x;
+        int tileAY = tileA.y;
+        int tileBX = tileB.x;
+        int tileBY = tileB.y;
+        tileMatrix[tileAX, tileAY] = tileB;
+        tileMatrix[tileBX, tileBY] = tileA;
+        tileA.x = tileBX;
+        tileA.y = tileBY;
+        tileB.x = tileAX;
+        tileB.y = tileAY;
+    }
+
+    private List<Tile> hintedTiles;
+
+    private void ShowHint()
+    {
+        hintedTiles = FindHint();
+        foreach (Tile tile in hintedTiles)
+        {
+            tile.Highlight(true);
+        }
+    }
+
+
+    private void HideHint()
+    {
+        if (hintedTiles != null)
+        {
+            foreach (Tile tile in hintedTiles)
+            {
+                tile.Highlight(false);
+            }
+        }
+    }
+
+    private List<Tile> FindHint()
+    {
+        for (int x = 0; x < width; x++)
+        {
+            for (int y = 0; y < height; y++)
+            {
+                Tile currentTile = tileMatrix[x, y];
+                if (currentTile == null || !currentTile.IsFullySpawned())
+                {
+                    continue;
+                }
+
+                List<Vector2Int> directions = new List<Vector2Int>
+                {
+                    Vector2Int.up,
+                    Vector2Int.right
+                };
+
+                foreach (Vector2Int direction in directions)
+                {
+                    int newX = x + direction.x;
+                    int newY = y + direction.y;
+
+                    if (IsValidCoordinate(newX, newY))
+                    {
+                        SwapTilesAt(x, y, newX, newY);
+                        if (CheckForMatchesAt(x, y).Count >= 2 || CheckForMatchesAt(newX, newY).Count >= 2)
+                        {
+                            SwapTilesAt(x, y, newX, newY); // Swap back before returning
+                            return new List<Tile> { currentTile, tileMatrix[newX, newY] };
+                        }
+                        SwapTilesAt(x, y, newX, newY); // Swap back if not valid hint
+                    }
+                }
+            }
+        }
+        return new List<Tile>(); // Return empty list if no hints found
+    }
+
+    private void SwapTilesAt(int x1, int y1, int x2, int y2)
+    {
+        Tile tempTile = tileMatrix[x1, y1];
+        tileMatrix[x1, y1] = tileMatrix[x2, y2];
+        tileMatrix[x2, y2] = tempTile;
+    }
+
+    private bool IsValidCoordinate(int x, int y)
+    {
+        return x >= 0 && x < width && y >= 0 && y < height;
+    }
 }
